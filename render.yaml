@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: solana-tracker
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 1 --timeout 120 -b 0.0.0.0:$PORT app:app
+    envVars:
+      - key: HELIUS_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.12.3

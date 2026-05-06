@@ -1,0 +1,1459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solana Token Tracker</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0f; color: #e0e0e0; min-height: 100vh; }
+        .container { max-width: 1280px; margin: 0 auto; padding: 24px; }
+        h1 { font-size: 28px; margin-bottom: 4px; color: #fff; letter-spacing: -0.5px; }
+        .subtitle { color: #666; font-size: 13px; margin-bottom: 24px; }
+
+        .input-section { background: #12121a; border: 1px solid #1e1e2e; border-radius: 14px; padding: 20px; margin-bottom: 24px; }
+        .input-row { display: flex; gap: 16px; margin-bottom: 12px; }
+        .input-group { flex: 1; }
+        .input-group label { display: block; font-size: 12px; color: #888; margin-bottom: 6px; font-weight: 500; }
+        .input-group .hint { font-size: 11px; color: #555; margin-top: 4px; line-height: 1.5; }
+        textarea, input[type="text"], input[type="password"], input[type="number"], input[type="date"], select {
+            width: 100%; background: #0a0a0f; border: 1px solid #2a2a3a; border-radius: 8px;
+            padding: 10px 14px; color: #e0e0e0; font-family: 'JetBrains Mono', 'Courier New', monospace; font-size: 13px; resize: vertical;
+        }
+        textarea { height: 80px; }
+        textarea.compact { height: 50px; }
+        textarea:focus, input:focus, select:focus { outline: none; border-color: #6c63ff; }
+
+        .bottom-row { display: flex; gap: 12px; align-items: center; }
+        .quote-toggle { display: flex; background: #0a0a0f; border: 1px solid #2a2a3a; border-radius: 8px; overflow: hidden; }
+        .quote-btn { padding: 10px 16px; background: none; border: none; color: #666; font-size: 13px; font-weight: 600; cursor: pointer; }
+        .quote-btn.active { background: #6c63ff; color: #fff; }
+
+        button.analyze-btn { background: #6c63ff; color: white; border: none; padding: 12px 32px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; flex: 1; }
+        button.analyze-btn:hover { background: #5a52e0; }
+        button.analyze-btn:disabled { background: #333; cursor: not-allowed; }
+        button.secondary-btn { background: transparent; color: #888; border: 1px solid #2a2a3a; padding: 10px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+        button.secondary-btn:hover { color: #ccc; border-color: #3a3a4a; }
+        button.action-btn { background: #6c63ff20; color: #b8b3ff; border: 1px solid #6c63ff60; padding: 8px 14px; border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 600; }
+        button.action-btn:hover { background: #6c63ff40; color: #fff; }
+        button.advanced-toggle { background: none; border: 1px dashed #2a2a3a; color: #888; padding: 8px 14px; border-radius: 8px; font-size: 12px; cursor: pointer; width: 100%; }
+        button.advanced-toggle:hover { color: #ccc; border-color: #6c63ff; }
+        .api-key-row { display: flex; gap: 8px; align-items: stretch; }
+        .api-key-row input { flex: 1; }
+        .key-status { font-size: 11px; padding: 4px 8px; border-radius: 4px; align-self: center; white-space: nowrap; }
+        .key-status.using-custom { background: #1a3a1a; color: #6dd896; }
+        .key-status.using-default { background: #2a2a3a; color: #888; }
+
+        .loading { text-align: center; padding: 40px; color: #666; }
+        .loading .spinner { border: 3px solid #1e1e2e; border-top: 3px solid #6c63ff; border-radius: 50%; width: 32px; height: 32px; animation: spin 1s linear infinite; margin: 0 auto 16px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .error { background: #2a1515; border: 1px solid #4a2020; border-radius: 8px; padding: 16px; color: #ff6b6b; margin-bottom: 16px; }
+
+        .reconcile-banner { border-radius: 12px; padding: 14px 18px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; font-size: 13px; }
+        .reconcile-ok   { background: #0f2517; border: 1px solid #1f4a2e; color: #6dd896; }
+        .reconcile-warn { background: #2a1f0e; border: 1px solid #4a3a1c; color: #ffc66e; }
+        .reconcile-skip { background: #161a2a; border: 1px solid #262e4a; color: #8aa0d8; }
+
+        .pnl-hero { background: linear-gradient(135deg, #15152a 0%, #12121a 100%);
+            border: 1px solid rgba(108, 99, 255, 0.4); border-radius: 14px; padding: 24px; margin-bottom: 16px;
+            display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; }
+        .pnl-cell { text-align: left; }
+        .pnl-cell .label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: 6px; }
+        .pnl-cell .value { font-size: 26px; font-weight: 700; color: #fff; line-height: 1.1; }
+        .pnl-cell .sub { font-size: 12px; color: #888; margin-top: 4px; }
+        .pnl-cell .split { font-size: 11px; color: #888; margin-top: 6px; line-height: 1.4; }
+        .pnl-cell .split .pos { color: #4caf50; }
+        .pnl-cell .split .neg { color: #ff6b6b; }
+        .pnl-divider { border-left: 1px solid #2a2a3a; }
+        @media (max-width: 768px) { .pnl-hero { grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; } }
+
+        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 24px; }
+        .summary-card { background: #12121a; border: 1px solid #1e1e2e; border-radius: 12px; padding: 16px; position: relative; }
+        .summary-card.highlight { border-color: rgba(108, 99, 255, 0.4); background: linear-gradient(135deg, #15152a 0%, #12121a 100%); }
+        .summary-card.breakeven { border-color: rgba(255, 152, 0, 0.4); background: linear-gradient(135deg, #2a1f0e 0%, #12121a 100%); }
+        .summary-card .label { font-size: 11px; color: #666; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+        .summary-card .value { font-size: 22px; font-weight: 700; color: #fff; word-break: break-all; }
+        .summary-card .sub { font-size: 12px; color: #888; margin-top: 4px; }
+        .positive { color: #4caf50 !important; }
+        .negative { color: #ff6b6b !important; }
+
+        .breakdown-card { background: #12121a; border: 1px solid #1e1e2e; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+        .breakdown-card h3 { font-size: 13px; color: #888; margin-bottom: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+        .breakdown-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #1a1a26; font-size: 13px; }
+        .breakdown-row:last-child { border-bottom: none; }
+        .breakdown-row .channel { color: #ccc; font-weight: 500; }
+        .breakdown-row .stats { color: #888; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+        .breakdown-row .pct { color: #6c63ff; font-weight: 600; min-width: 50px; text-align: right; }
+        .breakdown-bar { height: 4px; background: #1a1a26; border-radius: 2px; overflow: hidden; margin: 12px 0; display: flex; }
+        .breakdown-bar > div { height: 100%; transition: width 0.3s; }
+
+        .impact-section { background: #12121a; border: 1px solid #1e1e2e; border-radius: 14px; padding: 20px; margin-bottom: 24px; }
+        .impact-section h2 { font-size: 15px; color: #ccc; font-weight: 600; margin-bottom: 8px; }
+        .impact-section .subtitle { color: #666; font-size: 12px; margin-bottom: 16px; }
+        .impact-headline { background: linear-gradient(135deg, #2a1515 0%, #15152a 100%); border: 1px solid rgba(255, 107, 107, 0.3); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+        .impact-headline .big { font-size: 18px; font-weight: 700; color: #fff; line-height: 1.4; margin-bottom: 8px; }
+        .impact-headline .big .neg-num { color: #ff6b6b; }
+        .impact-headline .big .pct { color: #ffc66e; font-family: 'JetBrains Mono', monospace; }
+        .impact-headline .breakdown { color: #888; font-size: 12px; line-height: 1.5; }
+        .impact-totals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+        .impact-stat { background: #0a0a0f; border: 1px solid #1a1a26; border-radius: 8px; padding: 12px; }
+        .impact-stat .lab { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: 4px; }
+        .impact-stat .val { font-size: 18px; font-weight: 700; color: #fff; }
+        .impact-tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid #1e1e2e; padding-bottom: 12px; }
+        .impact-tab { background: #1a1a26; border: 1px solid #2a2a3a; color: #888; padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: 600; }
+        .impact-tab.active.worst { background: #3a1a1a; color: #ff6b6b; border-color: #ff6b6b60; }
+        .impact-tab.active.best { background: #1a3a1a; color: #4caf50; border-color: #4caf5060; }
+        .impact-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .impact-table th { text-align: left; color: #666; font-size: 10px; padding: 8px 10px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; border-bottom: 1px solid #1e1e2e; }
+        .impact-table td { padding: 10px; border-bottom: 1px solid #0e0e16; }
+        .impact-table .rank { color: #6c63ff; font-weight: 700; width: 30px; }
+        .impact-table .impact-val { font-family: 'JetBrains Mono', monospace; font-weight: 700; }
+        .impact-table .channel-pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+        .impact-table .channel-pill.regular { background: #1a3a1a; color: #4caf50; }
+        .impact-table .channel-pill.regular.sell-side { background: #3a1a1a; color: #ff6b6b; }
+        .impact-table .channel-pill.keeper { background: #2a1a3a; color: #ba68c8; }
+
+        .lp-section { background: #12121a; border: 1px solid #1e1e2e; border-radius: 14px; padding: 20px; margin-bottom: 24px; }
+        .lp-section h2 { font-size: 15px; margin-bottom: 16px; color: #ccc; font-weight: 600; }
+        .lp-flow-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+        .lp-flow-card { background: #0a0a0f; border: 1px solid #1a1a26; border-radius: 8px; padding: 12px; }
+        .lp-flow-card .lab { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: 8px; }
+        .lp-flow-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 12px; }
+        .lp-flow-row .k { color: #888; }
+        .lp-flow-row .v { color: #ccc; font-family: 'JetBrains Mono', monospace; }
+        .lp-flow-row.net { border-top: 1px solid #1e1e2e; margin-top: 4px; padding-top: 8px; font-weight: 600; }
+        .lp-pnl { background: linear-gradient(135deg, #15152a 0%, #12121a 100%); border: 1px solid rgba(108, 99, 255, 0.3); border-radius: 8px; padding: 16px; }
+        .lp-pnl-row { display: flex; justify-content: space-between; align-items: baseline; padding: 4px 0; }
+        .lp-pnl-row.big { padding: 10px 0; border-top: 1px solid #1e1e2e; margin-top: 8px; }
+        .lp-pnl-row.big .lab { font-size: 13px; color: #aaa; font-weight: 600; }
+        .lp-pnl-row.big .val { font-size: 22px; font-weight: 700; }
+        .lp-pnl-row .lab { font-size: 12px; color: #888; }
+        .lp-pnl-row .val { font-size: 14px; color: #ccc; font-family: 'JetBrains Mono', monospace; }
+        .lp-disclaimer { color: #666; font-size: 11px; margin-top: 12px; line-height: 1.5; }
+
+        .insights-section { background: #12121a; border: 1px solid #1e1e2e; border-radius: 14px; padding: 20px; margin-bottom: 24px; }
+        .insights-section h2 { font-size: 15px; color: #ccc; font-weight: 600; margin-bottom: 16px; }
+        .insights-tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; border-bottom: 1px solid #1e1e2e; padding-bottom: 12px; }
+        .insights-tab { background: #1a1a26; border: 1px solid #2a2a3a; color: #888; padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: 600; }
+        .insights-tab.active { background: #6c63ff20; color: #b8b3ff; border-color: #6c63ff60; }
+        .insights-controls { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+        .insights-toggle { display: flex; background: #0a0a0f; border: 1px solid #2a2a3a; border-radius: 6px; overflow: hidden; }
+        .insights-toggle button { background: none; border: none; color: #666; padding: 6px 14px; font-size: 12px; cursor: pointer; font-weight: 600; }
+        .insights-toggle button.active.best { background: #1a3a1a; color: #4caf50; }
+        .insights-toggle button.active.worst { background: #3a1a1a; color: #ff6b6b; }
+        .insights-controls label { color: #888; font-size: 12px; }
+        .insights-controls select { width: auto; padding: 6px 10px; }
+        .insights-table-wrap { overflow-x: auto; }
+        .insights-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .insights-table th { text-align: left; color: #666; font-size: 10px; padding: 8px 10px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; border-bottom: 1px solid #1e1e2e; }
+        .insights-table td { padding: 10px; border-bottom: 1px solid #0e0e16; }
+        .insights-table .rank { color: #6c63ff; font-weight: 700; width: 30px; }
+        .insights-table .price { font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+        .insights-table .price.best { color: #4caf50; }
+        .insights-table .price.worst { color: #ff6b6b; }
+        .insights-table .pct-cost { color: #b8b3ff; }
+        .insights-table .pct-tokens { color: #ffc66e; }
+        .insights-empty { color: #666; font-size: 13px; padding: 16px; text-align: center; }
+
+        .section { background: #12121a; border: 1px solid #1e1e2e; border-radius: 14px; padding: 20px; margin-bottom: 24px; }
+        .section h2 { font-size: 15px; margin-bottom: 16px; color: #ccc; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+        .chart-container { position: relative; height: 380px; }
+
+        table { width: 100%; border-collapse: collapse; }
+        th { text-align: left; font-size: 11px; color: #666; padding: 8px 12px; border-bottom: 1px solid #1e1e2e;
+            text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; cursor: pointer; user-select: none; white-space: nowrap; }
+        th:hover { color: #aaa; }
+        th .sort-arrow { margin-left: 4px; opacity: 0.4; font-size: 10px; }
+        th.sorted .sort-arrow { opacity: 1; color: #6c63ff; }
+        td { padding: 10px 12px; font-size: 13px; border-bottom: 1px solid #0e0e16; }
+        tr { transition: background 0.15s; }
+        tr:hover { background: #16161f; }
+        tr.highlighted { background: #2a2a3a !important; outline: 1px solid #6c63ff; }
+
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+        .badge-buy { background: #1a3a1a; color: #4caf50; }
+        .badge-sell { background: #3a1a1a; color: #ff6b6b; }
+        .badge-unpriced { background: #1a2a3a; color: #64b5f6; }
+        .badge-transfer { background: #2a2a1a; color: #ffd54f; }
+        .badge-dca { background: #2a1a3a; color: #ba68c8; }
+        .badge-lp { background: #1a3a3a; color: #4dd0e1; }
+        .badge-airdrop { background: #3a1a2a; color: #f48fb1; }
+        .sig-link { color: #6c63ff; text-decoration: none; font-family: monospace; font-size: 12px; }
+        .sig-link:hover { text-decoration: underline; }
+
+        .stats-row { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+        .stat-chip { background: #1e1e2e; padding: 4px 12px; border-radius: 6px; font-size: 11px; color: #888; }
+        .stat-chip.cache { background: #1a2a1a; color: #6dd896; }
+
+        .filter-row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: flex-end; }
+        .filter-btn { background: #1a1a26; border: 1px solid #2a2a3a; color: #888; padding: 4px 12px; border-radius: 6px; font-size: 11px; cursor: pointer; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+        .filter-btn.active { background: #2a2a3a; color: #fff; border-color: #6c63ff; }
+
+        .col-filters { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr; gap: 8px; margin-bottom: 12px; padding: 12px; background: #0e0e16; border-radius: 8px; border: 1px solid #1a1a26; }
+        .col-filters .ff { display: flex; flex-direction: column; gap: 4px; }
+        .col-filters label { font-size: 10px; color: #666; text-transform: uppercase; font-weight: 600; }
+        .col-filters input, .col-filters select { padding: 6px 8px; font-size: 12px; }
+        .filter-range { display: flex; gap: 4px; }
+        .filter-range input { width: 50%; }
+
+        .table-actions { display: flex; gap: 8px; margin-bottom: 12px; }
+
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); z-index: 1000; display: none; align-items: center; justify-content: center; padding: 20px; overflow-y: auto; }
+        .modal-overlay.show { display: flex; }
+        .modal { background: #12121a; border: 1px solid #2a2a3a; border-radius: 14px; padding: 24px; max-width: 540px; width: 100%; max-height: 90vh; overflow-y: auto; }
+        .modal h2 { font-size: 18px; color: #fff; margin-bottom: 16px; }
+        .modal .checklist { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+        .modal label.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #ccc; padding: 8px 12px; background: #0e0e16; border-radius: 6px; cursor: pointer; border: 1px solid #1e1e2e; }
+        .modal label.check:hover { border-color: #6c63ff; }
+        .modal label.check input { width: auto; }
+        .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+        .share-canvas-wrap { padding: 24px; background: linear-gradient(135deg, #1a1a3e 0%, #0a0a1a 100%); border-radius: 16px; margin-bottom: 16px; }
+        .share-card { background: #0a0a0f; padding: 32px; border-radius: 12px; border: 1px solid rgba(108, 99, 255, 0.3); position: relative; }
+        .share-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid #1e1e2e; }
+        .share-token { font-size: 24px; font-weight: 700; color: #fff; }
+        .share-brand { font-size: 11px; color: #6c63ff; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
+        .share-pnl-big { text-align: center; margin-bottom: 20px; }
+        .share-pnl-big .pnl-amount { font-size: 42px; font-weight: 800; line-height: 1; margin-bottom: 8px; }
+        .share-pnl-big .pnl-pct { font-size: 18px; font-weight: 600; }
+        .share-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .share-stat { background: #15152a; padding: 12px 14px; border-radius: 8px; }
+        .share-stat .label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+        .share-stat .value { font-size: 16px; font-weight: 700; color: #fff; }
+
+        @media (max-width: 768px) {
+            .input-row { flex-direction: column; }
+            .input-group { max-width: none !important; }
+            .col-filters { grid-template-columns: 1fr 1fr; }
+            .lp-flow-grid { grid-template-columns: 1fr; }
+            .impact-totals { grid-template-columns: 1fr; }
+        }
+        .projection-section { background: #12121a; border: 1px solid #1e1e2e; border-radius: 14px; padding: 20px; margin-bottom: 24px; }
+        .projection-section h2 { font-size: 15px; color: #ccc; font-weight: 600; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }
+        .projection-section .subtitle { color: #666; font-size: 12px; margin-bottom: 16px; }
+        .projection-inputs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
+        .projection-inputs .input-group label { display: block; font-size: 11px; color: #888; margin-bottom: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+        .projection-inputs input[type="range"] { width: 100%; accent-color: #6c63ff; }
+        .projection-inputs .horizon-value { font-size: 12px; color: #b8b3ff; margin-top: 4px; font-family: 'JetBrains Mono', monospace; }
+        .projection-price-note { color: #666; font-size: 11px; margin-bottom: 16px; line-height: 1.5; }
+        .projection-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px; }
+        .projection-tile { background: #0a0a0f; border: 1px solid #1a1a26; border-radius: 10px; padding: 14px; }
+        .projection-tile.profitable { border-color: rgba(76, 175, 80, 0.4); background: linear-gradient(135deg, #0f2517 0%, #0a0a0f 100%); }
+        .projection-tile.underwater { border-color: rgba(255, 107, 107, 0.4); background: linear-gradient(135deg, #2a1515 0%, #0a0a0f 100%); }
+        .projection-tile .label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: 6px; }
+        .projection-tile .value { font-size: 20px; font-weight: 700; color: #fff; line-height: 1.1; word-break: break-all; }
+        .projection-tile .sub { font-size: 11px; color: #888; margin-top: 6px; line-height: 1.5; }
+        .projection-table-wrap { overflow-x: auto; }
+        .projection-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .projection-table th { text-align: left; color: #666; font-size: 10px; padding: 8px 10px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; border-bottom: 1px solid #1e1e2e; }
+        .projection-table td { padding: 8px 10px; border-bottom: 1px solid #0e0e16; font-family: 'JetBrains Mono', monospace; }
+        @media (max-width: 768px) { .projection-inputs { grid-template-columns: 1fr 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Solana Token Tracker</h1>
+        <p class="subtitle">Multi-wallet · Jupiter DCA & Limit Orders · keeper fills · cancellation refunds · airdrops · LP · trade impact</p>
+
+        <div class="input-section">
+            <div class="input-row">
+                <div class="input-group">
+                    <label>Wallet Addresses (one per line)</label>
+                    <textarea id="wallets" placeholder="Paste wallet addresses here..."></textarea>
+                </div>
+                <div class="input-group" style="max-width: 400px;">
+                    <label>Token Mint Address</label>
+                    <input type="text" id="token" placeholder="e.g. EPjFW...USDC mint">
+                </div>
+            </div>
+            <div class="input-row">
+                <div class="input-group" style="max-width: 280px;">
+                    <label>Manual extra cost — overrides auto-detection if &gt; 0</label>
+                    <input type="text" id="dcaCost" placeholder="0 = use auto-detected" value="0">
+                </div>
+                <div class="input-group" style="max-width: 320px;">
+                    <label>Additional airdrop tokens (stacks with auto-detected)</label>
+                    <input type="text" id="airdropTokens" placeholder="0" value="0">
+                </div>
+            </div>
+            <div class="input-row">
+                <div class="input-group">
+                    <label>Helius API Key (your own — required for hosted version)</label>
+                    <div class="api-key-row">
+                        <input type="password" id="heliusKey" placeholder="Paste your Helius API key (https://helius.xyz/dashboard)" autocomplete="off">
+                        <span class="key-status using-default" id="keyStatus">using server default</span>
+                    </div>
+                    <div class="hint">Stored locally in your browser only. Sent to the server on each Analyze call so it can fetch tx data on your behalf.<br>If you don't have a key, get a free one at <a href="https://helius.xyz" target="_blank" style="color:#6c63ff;">helius.xyz</a> (100k credits/day on the free tier).</div>
+                </div>
+            </div>
+            <div style="margin-bottom: 12px;">
+                <button class="advanced-toggle" onclick="toggleAdvanced()" id="advBtn">⚙ Show advanced options (custom airdrop programs)</button>
+            </div>
+            <div id="advancedSection" style="display:none; margin-bottom: 12px;">
+                <div class="input-group">
+                    <label>Extra airdrop programs (program IDs, comma- or newline-separated)</label>
+                    <textarea id="extraAirdrops" class="compact" placeholder="Paste any additional airdrop / distributor program IDs here. Default whitelist already covers Metaplex Distro & Gumdrop."></textarea>
+                    <div class="hint">Default whitelist: Metaplex Distro (D1ST...vU8) + Metaplex Gumdrop (gdrp...D1a).</div>
+                </div>
+            </div>
+            <div class="bottom-row">
+                <div class="quote-toggle">
+                    <button class="quote-btn active" data-quote="USDC" onclick="setQuote(this)">USDC</button>
+                    <button class="quote-btn" data-quote="SOL" onclick="setQuote(this)">SOL</button>
+                    <button class="quote-btn" data-quote="USD" onclick="setQuote(this)">USD</button>
+                </div>
+                <button class="analyze-btn" id="analyzeBtn" onclick="analyze(false)">Analyze</button>
+                <button class="secondary-btn" onclick="analyze(true)">Force Refresh</button>
+                <button class="secondary-btn" onclick="clearCacheForCurrent()">Clear Cache (these wallets)</button>
+            </div>
+        </div>
+
+        <div id="results" style="display:none;">
+            <div id="reconcileBanner"></div>
+            <div id="pnlHero" class="pnl-hero" style="display:none;"></div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 12px;">
+                <button class="action-btn" onclick="openShareModal()">📸 Share P/L Card</button>
+            </div>
+
+            <div id="summary" class="summary-grid"></div>
+            <div id="breakdownCard" class="breakdown-card" style="display:none;"></div>
+
+            <div id="impactSection" class="impact-section" style="display:none;"></div>
+
+            <div id="lpSection" class="lp-section" style="display:none;"></div>
+
+            <div id="insightsSection" class="insights-section" style="display:none;">
+                <h2>Trade Insights — best & worst per category (by price)</h2>
+                <div class="insights-tabs" id="insightsTabs"></div>
+                <div class="insights-controls">
+                    <div class="insights-toggle" id="insightsToggle">
+                        <button class="active best" data-mode="best" onclick="setInsightMode(this)">Best</button>
+                        <button class="worst" data-mode="worst" onclick="setInsightMode(this)">Worst</button>
+                    </div>
+                    <label>Show top
+                        <select id="insightsN" onchange="renderInsights()">
+                            <option value="3">3</option>
+                            <option value="5">5</option>
+                            <option value="7" selected>7</option>
+                            <option value="10">10</option>
+                            <option value="15">15</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="insights-table-wrap" id="insightsTable"></div>
+            </div>
+
+            <div id="airdropSection" class="section" style="display:none;">
+                <h2>Auto-Detected Airdrops <span style="float:right; cursor:pointer; color:#6c63ff; font-size:12px;" onclick="toggleSection('airdropBody')">show/hide</span></h2>
+                <div id="airdropBody" style="display:none;"></div>
+            </div>
+
+            <div id="fundingSection" class="section" style="display:none;">
+                <h2>Auto-Detected Escrow Funding <span style="float:right; cursor:pointer; color:#6c63ff; font-size:12px;" onclick="toggleSection('fundingBody')">show/hide</span></h2>
+                <div id="fundingBody" style="display:none;"></div>
+            </div>
+
+            <div class="section">
+                <h2>Trade History <span style="font-weight:400; font-size:12px; color:#888;">(click point to highlight in table)</span></h2>
+                <div class="chart-container"><canvas id="tradeChart"></canvas></div>
+            </div>
+
+            <div id="projectionSection" class="projection-section" style="display:none;">
+                <h2>Cardholder Projection
+                    <span style="cursor:pointer; color:#6c63ff; font-size:12px; font-weight:400;" onclick="toggleSection('projectionBody')">show/hide</span>
+                </h2>
+                <p class="subtitle">Estimate future token emissions and yield from Collector Crypt NFT cardholder airdrops.</p>
+                <div id="projectionBody" style="display:none;">
+                    <div class="projection-inputs">
+                        <div class="input-group">
+                            <label>Cards held</label>
+                            <input type="number" id="projCards" min="0" step="1" placeholder="0">
+                        </div>
+                        <div class="input-group">
+                            <label>Cardholder emissions so far (tokens)</label>
+                            <input type="number" id="projPastEmissions" min="0" step="any" placeholder="e.g. 10000">
+                        </div>
+                        <div class="input-group">
+                            <label>Card cost (USD)</label>
+                            <input type="number" id="projCardCost" min="0" step="any" placeholder="optional">
+                        </div>
+                        <div class="input-group">
+                            <label>Expected tokens / card / quarter</label>
+                            <input type="number" id="projRate" min="0" step="any" placeholder="e.g. 1500">
+                        </div>
+                        <div class="input-group">
+                            <label>Horizon (quarters)</label>
+                            <input type="range" id="projHorizon" min="1" max="20" step="1" value="4">
+                            <div class="horizon-value" id="projHorizonValue">4 quarters (1.0 year)</div>
+                        </div>
+                    </div>
+                    <div class="projection-price-note" id="projPriceNote"></div>
+                    <div class="projection-tiles" id="projectionTiles"></div>
+                    <div style="margin-top:12px;">
+                        <span style="cursor:pointer; color:#6c63ff; font-size:12px;" onclick="toggleSection('projectionTableWrap')">show/hide quarterly breakdown</span>
+                        <div id="projectionTableWrap" class="projection-table-wrap" style="display:none; margin-top:8px;">
+                            <table class="projection-table">
+                                <thead>
+                                    <tr><th>Quarter</th><th>Tokens received</th><th>Cumulative tokens</th><th>Cumulative value</th></tr>
+                                </thead>
+                                <tbody id="projectionTableBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>All Events</h2>
+                <div id="statsRow" class="stats-row"></div>
+                <div class="filter-row" id="filterRow"></div>
+                <div class="col-filters">
+                    <div class="ff"><label>Date</label>
+                        <div class="filter-range">
+                            <input type="date" id="f-date-from" onchange="renderTable()">
+                            <input type="date" id="f-date-to" onchange="renderTable()">
+                        </div>
+                    </div>
+                    <div class="ff"><label>Tokens (Δ) range</label>
+                        <div class="filter-range">
+                            <input type="number" id="f-tokens-min" placeholder="min" oninput="renderTable()">
+                            <input type="number" id="f-tokens-max" placeholder="max" oninput="renderTable()">
+                        </div>
+                    </div>
+                    <div class="ff"><label>Paid/Received range</label>
+                        <div class="filter-range">
+                            <input type="number" id="f-quote-min" placeholder="min" oninput="renderTable()">
+                            <input type="number" id="f-quote-max" placeholder="max" oninput="renderTable()">
+                        </div>
+                    </div>
+                    <div class="ff"><label>Price/Token range</label>
+                        <div class="filter-range">
+                            <input type="number" id="f-price-min" step="any" placeholder="min" oninput="renderTable()">
+                            <input type="number" id="f-price-max" step="any" placeholder="max" oninput="renderTable()">
+                        </div>
+                    </div>
+                    <div class="ff"><label>Source contains</label>
+                        <input type="text" id="f-source" placeholder="JUPITER, DCA…" oninput="renderTable()">
+                    </div>
+                    <div class="ff"><label>Signature contains</label>
+                        <input type="text" id="f-sig" placeholder="search sig..." oninput="renderTable()">
+                    </div>
+                </div>
+                <div class="table-actions">
+                    <button class="action-btn" onclick="exportCSV()">⬇ Export CSV (filtered)</button>
+                    <button class="secondary-btn" onclick="resetFilters()">Reset filters</button>
+                    <span id="filteredCount" style="margin-left:auto; align-self:center; color:#888; font-size:12px;"></span>
+                </div>
+                <div style="overflow-x: auto;">
+                    <table>
+                        <thead>
+                            <tr id="tableHead">
+                                <th data-sort="timestamp">Date <span class="sort-arrow">▼</span></th>
+                                <th data-sort="type">Type <span class="sort-arrow">▼</span></th>
+                                <th data-sort="token_delta">Tokens (Δ) <span class="sort-arrow">▼</span></th>
+                                <th data-sort="quote_amount_q">Paid/Received <span class="sort-arrow">▼</span></th>
+                                <th data-sort="price_per_token_q">Price/Token <span class="sort-arrow">▼</span></th>
+                                <th data-sort="source">Source <span class="sort-arrow">▼</span></th>
+                                <th>Tx</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tradesBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+
+        <div id="loading" class="loading" style="display:none;">
+            <div class="spinner"></div>
+            <p id="loadingText">Scanning wallets...</p>
+        </div>
+        <div id="error" class="error" style="display:none;"></div>
+    </div>
+
+    <div class="modal-overlay" id="shareModal">
+        <div class="modal">
+            <h2>📸 Share your P/L</h2>
+            <p style="color:#888; font-size:12px; margin-bottom:12px;">Pick what to include, then download as PNG.</p>
+            <div class="checklist">
+                <label class="check"><input type="checkbox" id="inc-pnl" checked> Net P/L (big)</label>
+                <label class="check"><input type="checkbox" id="inc-invested" checked> Total Invested</label>
+                <label class="check"><input type="checkbox" id="inc-realized" checked> Realized From Sells</label>
+                <label class="check"><input type="checkbox" id="inc-holdings" checked> Holdings Value</label>
+                <label class="check"><input type="checkbox" id="inc-avgbuy" checked> Avg Entry Price</label>
+                <label class="check"><input type="checkbox" id="inc-avgsell"> Avg Sell Price</label>
+                <label class="check"><input type="checkbox" id="inc-current"> Current Price</label>
+                <label class="check"><input type="checkbox" id="inc-tokens"> Token Count</label>
+                <label class="check"><input type="checkbox" id="inc-breakeven"> Break-even Price</label>
+            </div>
+            <div id="sharePreview" class="share-canvas-wrap"></div>
+            <div class="modal-actions">
+                <button class="secondary-btn" onclick="closeShareModal()">Cancel</button>
+                <button class="action-btn" onclick="downloadShareImage()">⬇ Download PNG</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script>
+        let chart = null;
+        let selectedQuote = 'USDC';
+        let lastData = null;
+        let typeFilter = 'all';
+        let sortKey = 'timestamp';
+        let sortDir = 'desc';
+        let insightsCategory = 'reg_buys';
+        let insightsMode = 'best';
+        let impactMode = 'worst';
+        const STORAGE_KEY = 'solTracker.v3.16';
+
+        function loadPrefs() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY)
+                    || localStorage.getItem('solTracker.v3.15')
+                    || localStorage.getItem('solTracker.v3.14')
+                    || localStorage.getItem('solTracker.v3.13')
+                    || localStorage.getItem('solTracker.v3.11')
+                    || localStorage.getItem('solTracker.v3.10');
+                if (!raw) return;
+                const p = JSON.parse(raw);
+                if (p.wallets) document.getElementById('wallets').value = p.wallets;
+                if (p.token) document.getElementById('token').value = p.token;
+                if (p.dcaCost !== undefined) document.getElementById('dcaCost').value = p.dcaCost;
+                if (p.airdropTokens !== undefined) document.getElementById('airdropTokens').value = p.airdropTokens;
+                if (p.extraAirdrops) document.getElementById('extraAirdrops').value = p.extraAirdrops;
+                if (p.heliusKey) document.getElementById('heliusKey').value = p.heliusKey;
+                if (p.projCards !== undefined) document.getElementById('projCards').value = p.projCards;
+                if (p.projPastEmissions !== undefined) document.getElementById('projPastEmissions').value = p.projPastEmissions;
+                if (p.projCardCost !== undefined) document.getElementById('projCardCost').value = p.projCardCost;
+                if (p.projRate !== undefined) document.getElementById('projRate').value = p.projRate;
+                if (p.projHorizon !== undefined) document.getElementById('projHorizon').value = p.projHorizon;
+                if (p.quote) {
+                    selectedQuote = p.quote;
+                    document.querySelectorAll('.quote-btn').forEach(b => {
+                        b.classList.toggle('active', b.dataset.quote === p.quote);
+                    });
+                }
+                updateKeyStatus();
+            } catch (e) {}
+        }
+        function savePrefs() {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify({
+                    wallets: document.getElementById('wallets').value,
+                    token: document.getElementById('token').value,
+                    dcaCost: document.getElementById('dcaCost').value,
+                    airdropTokens: document.getElementById('airdropTokens').value,
+                    extraAirdrops: document.getElementById('extraAirdrops').value,
+                    heliusKey: document.getElementById('heliusKey').value,
+                    quote: selectedQuote,
+                    projCards: document.getElementById('projCards').value,
+                    projPastEmissions: document.getElementById('projPastEmissions').value,
+                    projCardCost: document.getElementById('projCardCost').value,
+                    projRate: document.getElementById('projRate').value,
+                    projHorizon: document.getElementById('projHorizon').value,
+                }));
+            } catch (e) {}
+        }
+        function updateKeyStatus() {
+            const status = document.getElementById('keyStatus');
+            const key = document.getElementById('heliusKey').value.trim();
+            if (key && key.length >= 20) {
+                status.className = 'key-status using-custom';
+                status.textContent = 'using your key ✓';
+            } else {
+                status.className = 'key-status using-default';
+                status.textContent = 'using server default';
+            }
+        }
+        loadPrefs();
+        document.getElementById('heliusKey').addEventListener('input', () => { updateKeyStatus(); savePrefs(); });
+
+        function toggleAdvanced() {
+            const sec = document.getElementById('advancedSection');
+            const btn = document.getElementById('advBtn');
+            const showing = sec.style.display !== 'none';
+            sec.style.display = showing ? 'none' : 'block';
+            btn.textContent = showing ? '⚙ Show advanced options (custom airdrop programs)' : '⚙ Hide advanced options';
+        }
+
+        function setQuote(btn) {
+            document.querySelectorAll('.quote-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            selectedQuote = btn.dataset.quote;
+            savePrefs();
+        }
+
+        async function analyze(forceFresh) {
+            savePrefs();
+            const wallets = document.getElementById('wallets').value.trim();
+            const token = document.getElementById('token').value.trim();
+            const btn = document.getElementById('analyzeBtn');
+            if (!wallets || !token) { showError('Please enter wallet addresses and a token address'); return; }
+            btn.disabled = true; btn.textContent = 'Scanning...';
+            document.getElementById('loadingText').textContent = forceFresh ? 'Force refresh — refetching everything...' : 'Scanning wallets...';
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('error').style.display = 'none';
+            try {
+                const resp = await fetch('/api/analyze', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        wallets, token_address: token, display_quote: selectedQuote,
+                        manual_dca_cost: parseFloat(document.getElementById('dcaCost').value) || 0,
+                        airdrop_tokens: parseFloat(document.getElementById('airdropTokens').value) || 0,
+                        extra_airdrop_programs: document.getElementById('extraAirdrops').value || '',
+                        helius_api_key: document.getElementById('heliusKey').value.trim() || '',
+                        force_fresh: !!forceFresh,
+                    }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) { showError(data.error || 'Unknown error'); return; }
+                lastData = data;
+                renderResults(data);
+            } catch (e) {
+                showError('Failed: ' + e.message);
+            } finally {
+                btn.disabled = false; btn.textContent = 'Analyze';
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+
+        async function clearCacheForCurrent() {
+            const wallets = document.getElementById('wallets').value.trim();
+            if (!wallets) { showError('Enter wallet(s) first'); return; }
+            const list = wallets.split('\n').map(s => s.trim()).filter(Boolean);
+            if (!confirm(`Clear cache for ${list.length} wallet(s)?\n${list.join('\n')}`)) return;
+            const resp = await fetch('/api/clear-cache', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ wallets }),
+            });
+            const data = await resp.json();
+            alert(`Cleared ${data.count || 0} wallet cache(s)`);
+        }
+
+        function showError(msg) {
+            document.getElementById('error').textContent = msg;
+            document.getElementById('error').style.display = 'block';
+        }
+
+        function fmt(n, d = 4) {
+            if (n === undefined || n === null || isNaN(n)) return '0';
+            if (n === 0) return '0';
+            if (Math.abs(n) < 0.0001) return n.toExponential(2);
+            return n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+        }
+        function fmtUsd(n) { return '$' + (n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+        function pnlClass(n) { return n > 0 ? 'positive' : n < 0 ? 'negative' : ''; }
+
+        function renderReconcile(s) {
+            const el = document.getElementById('reconcileBanner');
+            if (s.on_chain_balance === null || s.on_chain_balance === undefined) {
+                el.innerHTML = `<div class="reconcile-banner reconcile-skip"><b>Balance check skipped.</b></div>`;
+                return;
+            }
+            if (s.reconciled) {
+                el.innerHTML = `<div class="reconcile-banner reconcile-ok">✓ <b>Reconciled.</b> Computed (${fmt(s.computed_holdings, 2)}) ≈ on-chain (${fmt(s.on_chain_balance, 2)}).</div>`;
+            } else {
+                el.innerHTML = `<div class="reconcile-banner reconcile-warn">⚠ <b>Balance mismatch.</b> Computed ${fmt(s.computed_holdings, 2)} vs on-chain ${fmt(s.on_chain_balance, 2)} (off by ${fmt(s.reconciliation_diff, 2)}).</div>`;
+            }
+        }
+
+        function renderPnlHero(summary) {
+            const q = summary.display_quote;
+            const el = document.getElementById('pnlHero');
+            const pnl = summary.net_pnl;
+            const pnlPct = summary.net_pnl_pct;
+            const realized = summary.realized_pnl_usd || 0;
+            const unrealized = summary.unrealized_pnl_usd || 0;
+            const splitLine = (Math.abs(realized) > 0.01 || Math.abs(unrealized) > 0.01) ? `
+                <div class="split">
+                    Realized: <span class="${realized >= 0 ? 'pos' : 'neg'}">${realized >= 0 ? '+' : ''}${fmtUsd(realized)}</span>
+                    · Unrealized: <span class="${unrealized >= 0 ? 'pos' : 'neg'}">${unrealized >= 0 ? '+' : ''}${fmtUsd(unrealized)}</span>
+                </div>` : '';
+            el.style.display = 'grid';
+            el.innerHTML = `
+                <div class="pnl-cell"><div class="label">Total Invested</div>
+                    <div class="value">${fmt(summary.total_invested, 2)} ${q}</div>
+                    <div class="sub">${fmtUsd(summary.total_invested_usd)} cash in</div></div>
+                <div class="pnl-cell pnl-divider"><div class="label">Realized From Sells</div>
+                    <div class="value">${fmt(summary.realized_proceeds, 2)} ${q}</div>
+                    <div class="sub">${fmtUsd(summary.realized_proceeds_usd)} cash out</div></div>
+                <div class="pnl-cell pnl-divider"><div class="label">Holdings Value</div>
+                    <div class="value">${fmt(summary.holdings_value, 2)} ${q}</div>
+                    <div class="sub">${fmt(summary.holdings, 2)} tokens @ ${fmt(summary.current_token_price, 6)}</div></div>
+                <div class="pnl-cell pnl-divider"><div class="label">Net P/L</div>
+                    <div class="value ${pnlClass(pnl)}">${pnl > 0 ? '+' : ''}${fmt(pnl, 2)} ${q}</div>
+                    <div class="sub ${pnlClass(pnl)}">${fmtUsd(summary.net_pnl_usd)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%)</div>
+                    ${splitLine}
+                </div>
+            `;
+        }
+
+        function renderBreakdown(summary) {
+            const b = summary.cost_breakdown;
+            const q = summary.display_quote;
+            if (!b) return;
+            const el = document.getElementById('breakdownCard');
+            const channels = [
+                { name: 'Regular market buys', data: b.reg_buys, color: '#4caf50' },
+                { name: 'Keeper-net (DCA / Limit / Recurring)', data: b.keeper, color: '#ba68c8' },
+                { name: `Funding-attributed (${b.funding.source})`, data: b.funding, color: '#ff9800' },
+            ].filter(c => c.data.cost > 0);
+            if (channels.length === 0) { el.style.display = 'none'; return; }
+            el.style.display = 'block';
+            el.innerHTML = `
+                <h3>Cost Basis Breakdown by Channel</h3>
+                <div class="breakdown-bar">${channels.map(c => `<div style="background:${c.color}; width:${c.data.pct_of_cost}%"></div>`).join('')}</div>
+                ${channels.map(c => `
+                    <div class="breakdown-row">
+                        <span class="channel" style="color:${c.color};">● ${c.name}</span>
+                        <span class="stats">${fmt(c.data.tokens, 0)} tokens for ${fmt(c.data.cost, 2)} ${q} @ ${fmt(c.data.avg, 6)}/token</span>
+                        <span class="pct">${c.data.pct_of_cost.toFixed(1)}%</span>
+                    </div>
+                `).join('')}
+            `;
+        }
+
+        function renderImpact() {
+            const sec = document.getElementById('impactSection');
+            if (!lastData || !lastData.trade_impact) { sec.style.display = 'none'; return; }
+            const ti = lastData.trade_impact;
+            const q = ti.display_quote;
+            if (ti.all_count === 0) { sec.style.display = 'none'; return; }
+            sec.style.display = 'block';
+
+            // Concentration headline
+            let headline = '';
+            if (ti.total_negative_impact < -0.01) {
+                const top3Pct = ti.top3_neg_share_pct.toFixed(1);
+                const top5Pct = ti.top5_neg_share_pct.toFixed(1);
+                headline = `
+                    <div class="impact-headline">
+                        <div class="big">Your top 3 worst trades = <span class="pct">${top3Pct}%</span> of your total negative impact <span class="neg-num">(${fmt(ti.total_negative_impact, 2)} ${q})</span></div>
+                        <div class="breakdown">Top 5 = ${top5Pct}% · ${ti.negative_count} trades hurt you · ${ti.positive_count} trades helped · combined net impact: <span style="color:${ti.net_impact > 0 ? '#4caf50' : '#ff6b6b'}">${ti.net_impact > 0 ? '+' : ''}${fmt(ti.net_impact, 2)} ${q}</span></div>
+                    </div>`;
+            }
+
+            const totals = `
+                <div class="impact-totals">
+                    <div class="impact-stat"><div class="lab">Total Drawdown</div><div class="val negative">${fmt(ti.total_negative_impact, 2)} ${q}</div></div>
+                    <div class="impact-stat"><div class="lab">Total Gains</div><div class="val positive">+${fmt(ti.total_positive_impact, 2)} ${q}</div></div>
+                    <div class="impact-stat"><div class="lab">Net Impact</div><div class="val ${ti.net_impact > 0 ? 'positive' : 'negative'}">${ti.net_impact > 0 ? '+' : ''}${fmt(ti.net_impact, 2)} ${q}</div></div>
+                </div>`;
+
+            const list = (impactMode === 'worst') ? ti.worst : ti.best;
+            const tableRows = list.map((e, i) => {
+                const date = new Date(e.timestamp * 1000);
+                const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+                const channelClass = e.channel + (e.channel === 'regular' && e.side === 'sell' ? ' sell-side' : '');
+                const channelLabel = e.channel === 'keeper' ? `Limit ${e.side}` : `Reg ${e.side}`;
+                const impactColor = e.impact_q > 0 ? 'positive' : 'negative';
+                const explanation = e.side === 'buy'
+                    ? `${fmt(e.token_amount, 0)} tokens @ ${fmt(e.entry_price, 6)} · current ${fmt(e.exit_price, 6)}`
+                    : `${fmt(e.token_amount, 0)} tokens sold @ ${fmt(e.exit_price, 6)} · vs avg entry ${fmt(e.entry_price, 6)}`;
+                return `<tr>
+                    <td class="rank">${i + 1}</td>
+                    <td>${dateStr}</td>
+                    <td><span class="channel-pill ${channelClass}">${channelLabel}</span></td>
+                    <td>${explanation}</td>
+                    <td>${fmt(e.quote_amount, 0)} ${q}</td>
+                    <td class="impact-val ${impactColor}">${e.impact_q > 0 ? '+' : ''}${fmt(e.impact_q, 2)} ${q}</td>
+                    <td><a class="sig-link" href="https://solscan.io/tx/${e.signature}" target="_blank">${e.signature.slice(0,8)}...</a></td>
+                </tr>`;
+            }).join('');
+
+            sec.innerHTML = `
+                <h2>Trade Impact — ranked by P/L contribution</h2>
+                <div class="subtitle">Each priced trade's effect on your bottom line. Buys: unrealized impact at current price. Sells: realized impact vs your weighted-avg entry (${fmt(ti.weighted_avg_entry, 6)} ${q}).</div>
+                ${headline}
+                ${totals}
+                <div class="impact-tabs">
+                    <button class="impact-tab worst ${impactMode === 'worst' ? 'active' : ''}" onclick="setImpactMode('worst')">Hurting Most</button>
+                    <button class="impact-tab best ${impactMode === 'best' ? 'active' : ''}" onclick="setImpactMode('best')">Helping Most</button>
+                </div>
+                <div style="overflow-x:auto;"><table class="impact-table">
+                    <thead><tr>
+                        <th>#</th><th>Date</th><th>Type</th><th>What happened</th><th>Size</th><th>P/L Impact</th><th>Tx</th>
+                    </tr></thead>
+                    <tbody>${tableRows || '<tr><td colspan="7" style="color:#666; text-align:center; padding:16px;">No trades in this category.</td></tr>'}</tbody>
+                </table></div>
+            `;
+        }
+
+        function setImpactMode(mode) { impactMode = mode; renderImpact(); }
+
+        function renderLpBreakdown(lp, summary) {
+            const el = document.getElementById('lpSection');
+            if (!lp || lp.count === 0) { el.style.display = 'none'; return; }
+            el.style.display = 'block';
+            const symbol = lastData.token_symbol || 'TOKEN';
+            const programs = Object.entries(lp.by_program).map(([k, v]) => `${k}: ${v}`).join(' · ');
+            const pnlClassStr = lp.lp_pnl_usd > 0 ? 'positive' : lp.lp_pnl_usd < 0 ? 'negative' : '';
+            el.innerHTML = `
+                <h2>Liquidity Pool Activity <span style="font-weight:400; font-size:12px; color:#888;">${lp.count} events · ${programs}</span></h2>
+                <div class="lp-flow-grid">
+                    <div class="lp-flow-card">
+                        <div class="lab">${symbol} flow</div>
+                        <div class="lp-flow-row"><span class="k">In (withdrawals)</span><span class="v">+${fmt(lp.target_in, 2)}</span></div>
+                        <div class="lp-flow-row"><span class="k">Out (deposits)</span><span class="v">-${fmt(lp.target_out, 2)}</span></div>
+                        <div class="lp-flow-row net"><span class="k">Net</span><span class="v ${lp.target_net > 0 ? 'positive' : lp.target_net < 0 ? 'negative' : ''}">${lp.target_net > 0 ? '+' : ''}${fmt(lp.target_net, 2)}</span></div>
+                    </div>
+                    <div class="lp-flow-card">
+                        <div class="lab">USDC flow</div>
+                        <div class="lp-flow-row"><span class="k">In</span><span class="v">+${fmt(lp.usdc_in, 2)}</span></div>
+                        <div class="lp-flow-row"><span class="k">Out</span><span class="v">-${fmt(lp.usdc_out, 2)}</span></div>
+                        <div class="lp-flow-row net"><span class="k">Net</span><span class="v ${lp.usdc_net > 0 ? 'positive' : lp.usdc_net < 0 ? 'negative' : ''}">${lp.usdc_net > 0 ? '+$' : '-$'}${fmt(Math.abs(lp.usdc_net), 2)}</span></div>
+                    </div>
+                    <div class="lp-flow-card">
+                        <div class="lab">SOL flow</div>
+                        <div class="lp-flow-row"><span class="k">In</span><span class="v">+${fmt(lp.sol_in, 4)}</span></div>
+                        <div class="lp-flow-row"><span class="k">Out</span><span class="v">-${fmt(lp.sol_out, 4)}</span></div>
+                        <div class="lp-flow-row net"><span class="k">Net</span><span class="v ${lp.sol_net > 0 ? 'positive' : lp.sol_net < 0 ? 'negative' : ''}">${lp.sol_net > 0 ? '+' : ''}${fmt(lp.sol_net, 4)}</span></div>
+                    </div>
+                </div>
+                <div class="lp-pnl">
+                    <div class="lp-pnl-row"><span class="lab">Deposit value (at current prices)</span><span class="val">${fmtUsd(lp.deposit_value_usd)}</span></div>
+                    <div class="lp-pnl-row"><span class="lab">Withdraw value (at current prices)</span><span class="val">${fmtUsd(lp.withdraw_value_usd)}</span></div>
+                    <div class="lp-pnl-row big"><span class="lab">LP P/L (heuristic, fees + IL combined)</span><span class="val ${pnlClassStr}">${lp.lp_pnl_usd > 0 ? '+' : ''}${fmtUsd(lp.lp_pnl_usd)}</span></div>
+                </div>
+                <div class="lp-disclaimer">
+                    Heuristic. Compares all-time deposit value vs withdrawal value at <b>current</b> prices. Doesn't separate fees from impermanent loss.
+                </div>
+            `;
+        }
+
+        function renderInsights() {
+            const sec = document.getElementById('insightsSection');
+            if (!lastData || !lastData.best_worst) { sec.style.display = 'none'; return; }
+            const bw = lastData.best_worst;
+            const meta = bw._meta || {};
+            const cats = [
+                { id: 'reg_buys',    label: `Regular Buys (${meta.reg_buys_total || 0})`,        side: 'buy'  },
+                { id: 'reg_sells',   label: `Regular Sells (${meta.reg_sells_total || 0})`,      side: 'sell' },
+                { id: 'keeper_buys', label: `Keeper Buys (${meta.keeper_buys_priced || 0})`,     side: 'buy'  },
+                { id: 'keeper_sells',label: `Keeper Sells (${meta.keeper_sells_priced || 0})`,   side: 'sell' },
+            ];
+            const totalEntries = cats.reduce((sum, c) => sum + (bw[c.id + '_best'] || []).length, 0);
+            if (totalEntries === 0) { sec.style.display = 'none'; return; }
+            sec.style.display = 'block';
+
+            document.getElementById('insightsTabs').innerHTML = cats.map(c =>
+                `<button class="insights-tab ${c.id === insightsCategory ? 'active' : ''}" onclick="setInsightCategory('${c.id}')">${c.label}</button>`
+            ).join('');
+            document.querySelectorAll('#insightsToggle button').forEach(b =>
+                b.classList.toggle('active', b.dataset.mode === insightsMode));
+
+            const cat = cats.find(c => c.id === insightsCategory);
+            const list = (bw[insightsCategory + '_' + insightsMode] || []).slice(0, parseInt(document.getElementById('insightsN').value, 10) || 7);
+            const summary = lastData.summary;
+            const q = summary.display_quote;
+
+            const totalCost      = summary.total_cost || 1;
+            const totalRevenue   = summary.total_sell_revenue || 1;
+            const totalTokensIn  = summary.total_bought_tokens || 1;
+            const totalTokensOut = summary.total_sold || 1;
+            const denomQuote = cat.side === 'buy' ? totalCost : totalRevenue;
+            const denomTokens = cat.side === 'buy' ? totalTokensIn : totalTokensOut;
+            const denomQuoteLabel = cat.side === 'buy' ? 'cost basis' : 'revenue';
+            const denomTokenLabel = cat.side === 'buy' ? 'bought' : 'sold';
+
+            if (list.length === 0) {
+                document.getElementById('insightsTable').innerHTML = `<div class="insights-empty">No priced ${cat.side === 'buy' ? 'buys' : 'sells'} in this category.</div>`;
+                return;
+            }
+
+            const priceClass = insightsMode === 'best' ? 'best' : 'worst';
+            document.getElementById('insightsTable').innerHTML = `
+                <table class="insights-table">
+                    <thead><tr>
+                        <th>#</th><th>Date</th><th>Tokens</th><th>Price</th><th>${cat.side === 'buy' ? 'Paid' : 'Received'}</th>
+                        <th>% of ${denomQuoteLabel}</th><th>% of tokens ${denomTokenLabel}</th><th>Tx</th>
+                    </tr></thead>
+                    <tbody>
+                        ${list.map((e, i) => {
+                            const date = new Date(e.timestamp * 1000);
+                            const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+                            const pctQ = (e.quote_amount / denomQuote * 100);
+                            const pctT = (e.token_amount / denomTokens * 100);
+                            return `<tr>
+                                <td class="rank">${i + 1}</td>
+                                <td>${dateStr}</td>
+                                <td>${fmt(e.token_amount, 2)}</td>
+                                <td class="price ${priceClass}">${fmt(e.price_per_token, 8)} ${q}</td>
+                                <td>${fmt(e.quote_amount, 2)} ${q}</td>
+                                <td class="pct-cost">${pctQ.toFixed(2)}%</td>
+                                <td class="pct-tokens">${pctT.toFixed(2)}%</td>
+                                <td><a class="sig-link" href="https://solscan.io/tx/${e.signature}" target="_blank">${e.signature.slice(0,8)}...</a></td>
+                            </tr>`;
+                        }).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        function setInsightCategory(id) { insightsCategory = id; renderInsights(); }
+        function setInsightMode(btn) { insightsMode = btn.dataset.mode; renderInsights(); }
+
+        function renderResults(data) {
+            const { trades, summary, funding_events, airdrop_events, lp_breakdown } = data;
+            const q = summary.display_quote;
+            renderReconcile(summary);
+            renderPnlHero(summary);
+            renderBreakdown(summary);
+            renderImpact();
+            renderLpBreakdown(lp_breakdown, summary);
+            renderInsights();
+
+            const strictNote = summary.strict_avg_buy_price > 0 ? `Strict (priced only): ${fmt(summary.strict_avg_buy_price, 8)} ${q}` : '';
+            const airdropExclNote = summary.total_airdrop_tokens > 0 ? ` · ${fmt(summary.total_airdrop_tokens, 0)} airdrops excluded` : '';
+
+            const beEl = summary.break_even_price > 0 ? (() => {
+                const above = summary.break_even_pct_above_current;
+                const aboveStr = above > 0 ? `${above.toFixed(1)}% above current` : `${Math.abs(above).toFixed(1)}% below current`;
+                const aboveCls = above > 0 ? 'negative' : 'positive';
+                return `
+                <div class="summary-card breakeven">
+                    <div class="label">Break-even Price</div>
+                    <div class="value">${fmt(summary.break_even_price, 6)} ${q}</div>
+                    <div class="sub"><span class="${aboveCls}">${aboveStr}</span> · price needed for net P/L = 0</div>
+                </div>`;
+            })() : '';
+
+            document.getElementById('summary').innerHTML = `
+                <div class="summary-card highlight">
+                    <div class="label">Avg Entry Price (combined)</div>
+                    <div class="value">${fmt(summary.spread_avg_buy_price, 8)} ${q}</div>
+                    <div class="sub">${fmt(summary.total_bought_tokens, 2)} tokens · ${fmt(summary.total_cost, 2)} ${q}<br>${strictNote}${airdropExclNote}</div></div>
+                ${beEl}
+                <div class="summary-card">
+                    <div class="label">Holdings</div>
+                    <div class="value">${fmt(summary.holdings, 2)}</div>
+                    <div class="sub">${fmt(summary.current_value, 4)} ${q} (${fmtUsd(summary.current_value_usd)})</div></div>
+                <div class="summary-card">
+                    <div class="label">Current Price</div>
+                    <div class="value">${fmt(summary.current_token_price, 8)} ${q}</div>
+                    <div class="sub">SOL: ${fmtUsd(summary.sol_price_usd)}</div></div>
+                <div class="summary-card">
+                    <div class="label">Avg Sell Price</div>
+                    <div class="value">${fmt(summary.avg_sell_price, 8)} ${q}</div>
+                    <div class="sub">${summary.num_sells} sells + ${fmt(summary.dca_sell_tokens, 2)} via DCA</div></div>
+                <div class="summary-card">
+                    <div class="label">Auto-Detected Airdrops</div>
+                    <div class="value" style="color:#f48fb1;">${fmt(summary.auto_airdrop_tokens, 0)}</div>
+                    <div class="sub">${summary.auto_airdrop_count} txs</div></div>
+                <div class="summary-card">
+                    <div class="label">Auto-Detected Funding</div>
+                    <div class="value" style="color:#ff9800;">${fmtUsd(summary.auto_funding_usd)}</div>
+                    <div class="sub">${(funding_events || []).length} setup txs</div></div>
+            `;
+
+            const airdropSection = document.getElementById('airdropSection');
+            if (airdrop_events && airdrop_events.length > 0) {
+                airdropSection.style.display = 'block';
+                document.getElementById('airdropBody').innerHTML = `
+                    <table><thead><tr><th>Date</th><th>Wallet</th><th>Tokens</th><th>Tx</th></tr></thead><tbody>
+                    ${airdrop_events.slice().reverse().map(a => {
+                        const date = new Date(a.timestamp * 1000);
+                        const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+                        const wal = a.wallet ? a.wallet.slice(0, 6) + '...' + a.wallet.slice(-4) : '?';
+                        return `<tr><td>${dateStr}</td><td><span class="sig-link">${wal}</span></td><td><span class="badge badge-airdrop">+${fmt(a.token_amount, 2)}</span></td><td><a class="sig-link" href="https://solscan.io/tx/${a.signature}" target="_blank">${a.signature.slice(0,10)}...</a></td></tr>`;
+                    }).join('')}
+                    </tbody></table>`;
+            } else { airdropSection.style.display = 'none'; }
+
+            const fundingSection = document.getElementById('fundingSection');
+            if (funding_events && funding_events.length > 0) {
+                fundingSection.style.display = 'block';
+                document.getElementById('fundingBody').innerHTML = `
+                    <table><thead><tr><th>Date</th><th>Wallet</th><th>SOL out</th><th>USDC out</th><th>USD value</th><th>Tx</th></tr></thead><tbody>
+                    ${funding_events.slice().reverse().map(e => {
+                        const date = new Date(e.timestamp * 1000);
+                        const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+                        const wal = e.wallet ? e.wallet.slice(0, 6) + '...' + e.wallet.slice(-4) : '?';
+                        return `<tr><td>${dateStr}</td><td>${wal}</td><td>${e.sol_out > 0 ? fmt(e.sol_out, 4) : '—'}</td><td>${e.usdc_out > 0 ? fmt(e.usdc_out, 2) : '—'}</td><td>${fmtUsd(e.funding_usd)}</td><td><a class="sig-link" href="https://solscan.io/tx/${e.signature}" target="_blank">${e.signature.slice(0,10)}...</a></td></tr>`;
+                    }).join('')}
+                    </tbody></table>`;
+            } else { fundingSection.style.display = 'none'; }
+
+            const cacheLabel = data.cache_used ? '<span class="stat-chip cache">cache</span>' : '<span class="stat-chip">fresh</span>';
+            const keyLabel = data.using_custom_key ? '<span class="stat-chip cache">your key</span>' : '<span class="stat-chip">server key</span>';
+            document.getElementById('statsRow').innerHTML = `
+                ${cacheLabel}
+                ${keyLabel}
+                <span class="stat-chip">${data.wallets_scanned} wallet${data.wallets_scanned > 1 ? 's' : ''}</span>
+                <span class="stat-chip">${data.transactions_scanned} txs</span>
+                <span class="stat-chip">${trades.length} events</span>
+                <span class="stat-chip">${summary.dca_orders} keeper events</span>
+                <span class="stat-chip">${(funding_events || []).length} funding</span>
+                <span class="stat-chip">decimals: ${data.target_decimals}</span>
+            `;
+
+            const types = ['all', 'buy', 'sell', 'dca_tx', 'airdrop', 'unpriced_in', 'lp_op', 'transfer_out'];
+            document.getElementById('filterRow').innerHTML = types.map(t => {
+                const cnt = t === 'all' ? trades.length : trades.filter(x => x.type === t).length;
+                return `<button class="filter-btn ${t === typeFilter ? 'active' : ''}" onclick="setFilter('${t}')">${t} (${cnt})</button>`;
+            }).join('');
+
+            attachSortHandlers();
+            renderTable();
+            renderChart(trades, summary);
+            document.getElementById('projectionSection').style.display = 'block';
+            setupProjectionListeners();
+            recomputeProjection();
+            document.getElementById('results').style.display = 'block';
+        }
+
+        function getCurrentPriceUSD(summary) {
+            if (!summary || !summary.current_token_price) return 0;
+            if (summary.display_quote === 'SOL') {
+                return summary.current_token_price * (summary.sol_price_usd || 0);
+            }
+            return summary.current_token_price;
+        }
+
+        function computeProjection(inputs, summary) {
+            const cards    = Math.max(0, Number(inputs.cards)    || 0);
+            const cardCost = Math.max(0, Number(inputs.cardCost) || 0);
+            const rate     = Math.max(0, Number(inputs.rate)     || 0);
+            const quarters   = Math.min(1000, Math.max(0, Math.floor(Number(inputs.quarters)   || 0)));
+            const pastTokens = Math.max(0, Number(inputs.pastTokens) || 0);
+
+            const priceUSD     = getCurrentPriceUSD(summary);
+
+            const futurePerQuarter = cards * rate;
+            const futureTokens     = futurePerQuarter * quarters;
+            const totalTokens      = pastTokens + futureTokens;
+
+            const pastUSD   = pastTokens   * priceUSD;
+            const futureUSD = futureTokens * priceUSD;
+            const totalUSD  = totalTokens  * priceUSD;
+
+            const hasCost = cardCost > 0 && totalTokens > 0;
+            const effectiveCostPerToken = hasCost ? (cardCost / totalTokens) : null;
+            const breakEvenPrice        = effectiveCostPerToken;
+            const roiPct                = hasCost ? ((totalUSD - cardCost) / cardCost * 100) : null;
+            const profitable            = (priceUSD > 0 && breakEvenPrice !== null) ? (priceUSD > breakEvenPrice) : null;
+
+            const quarterRows = [];
+            for (let q = 1; q <= quarters; q++) {
+                const cumulativeTokens = pastTokens + futurePerQuarter * q;
+                quarterRows.push({
+                    quarter: q,
+                    tokensThisQuarter: futurePerQuarter,
+                    cumulativeTokens,
+                    cumulativeUSD: cumulativeTokens * priceUSD,
+                });
+            }
+
+            return {
+                cards, cardCost, rate, quarters,
+                pastTokens, futureTokens, totalTokens,
+                pastUSD, futureUSD, totalUSD,
+                priceUSD,
+                effectiveCostPerToken, breakEvenPrice, roiPct, profitable,
+                hasCost,
+                quarterRows,
+            };
+        }
+
+        function renderProjectionTiles(p) {
+            const priceStr = p.priceUSD > 0 ? fmtUsd(p.priceUSD) : '—';
+            const tiles = [];
+
+            tiles.push(`
+                <div class="projection-tile">
+                    <div class="label">Emissions so far</div>
+                    <div class="value">${fmt(p.pastTokens, 0)} tokens</div>
+                    <div class="sub">${p.priceUSD > 0 ? fmtUsd(p.pastUSD) : '—'} @ ${priceStr}</div>
+                </div>
+            `);
+            tiles.push(`
+                <div class="projection-tile">
+                    <div class="label">Projected (${p.quarters}q)</div>
+                    <div class="value">${fmt(p.futureTokens, 0)} tokens</div>
+                    <div class="sub">${p.priceUSD > 0 ? fmtUsd(p.futureUSD) : '—'}</div>
+                </div>
+            `);
+            tiles.push(`
+                <div class="projection-tile">
+                    <div class="label">Total</div>
+                    <div class="value">${fmt(p.totalTokens, 0)} tokens</div>
+                    <div class="sub">${p.priceUSD > 0 ? fmtUsd(p.totalUSD) : '—'}</div>
+                </div>
+            `);
+
+            if (p.hasCost) {
+                const cls = p.profitable === true ? 'profitable' : (p.profitable === false ? 'underwater' : '');
+                const roiStr = p.roiPct === null ? '—'
+                    : (p.roiPct >= 0 ? `+${p.roiPct.toFixed(1)}%` : `${p.roiPct.toFixed(1)}%`);
+                const roiCls = p.roiPct === null ? '' : (p.roiPct >= 0 ? 'positive' : 'negative');
+                const beStr = p.breakEvenPrice === null ? '—' : fmtUsd(p.breakEvenPrice);
+                const priceCmp = (p.priceUSD > 0 && p.breakEvenPrice !== null)
+                    ? `current ${fmtUsd(p.priceUSD)} → <span class="${roiCls}">${roiStr}</span>`
+                    : '';
+                tiles.push(`
+                    <div class="projection-tile ${cls}">
+                        <div class="label">Effective cost / token</div>
+                        <div class="value">${beStr}</div>
+                        <div class="sub">break-even = ${beStr}<br>${priceCmp}</div>
+                    </div>
+                `);
+            }
+
+            document.getElementById('projectionTiles').innerHTML = tiles.join('');
+        }
+
+        function renderProjectionTable(p) {
+            const tbody = document.getElementById('projectionTableBody');
+            if (p.quarterRows.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="4" style="color:#666; text-align:center;">No future quarters in projection</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = p.quarterRows.map(r => {
+                const usdCell = p.priceUSD > 0 ? fmtUsd(r.cumulativeUSD) : '—';
+                return `<tr>
+                    <td>Q+${r.quarter}</td>
+                    <td>${fmt(r.tokensThisQuarter, 0)}</td>
+                    <td>${fmt(r.cumulativeTokens, 0)}</td>
+                    <td>${usdCell}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        function recomputeProjection() {
+            if (!lastData || !lastData.summary) return;
+            const horizon = parseInt(document.getElementById('projHorizon').value, 10) || 0;
+            document.getElementById('projHorizonValue').textContent =
+                `${horizon} quarter${horizon === 1 ? '' : 's'} (${(horizon / 4).toFixed(1)} year${(horizon / 4) === 1 ? '' : 's'})`;
+
+            const inputs = {
+                cards:       parseFloat(document.getElementById('projCards').value)         || 0,
+                pastTokens:  parseFloat(document.getElementById('projPastEmissions').value) || 0,
+                cardCost:    parseFloat(document.getElementById('projCardCost').value)      || 0,
+                rate:        parseFloat(document.getElementById('projRate').value)          || 0,
+                quarters:    horizon,
+            };
+            const result = computeProjection(inputs, lastData.summary);
+
+            const priceUSD = result.priceUSD;
+            document.getElementById('projPriceNote').innerHTML =
+                priceUSD > 0
+                    ? `Future price assumed equal to current price (<b>${fmtUsd(priceUSD)}</b>).`
+                    : `Current price unavailable — token amounts only.`;
+
+            renderProjectionTiles(result);
+            renderProjectionTable(result);
+            savePrefs();
+        }
+
+        function setupProjectionListeners() {
+            if (window.__projectionListenersInstalled) return;
+            window.__projectionListenersInstalled = true;
+            const ids = ['projCards', 'projPastEmissions', 'projCardCost', 'projRate', 'projHorizon'];
+            ids.forEach(id => {
+                document.getElementById(id).addEventListener('input', () => {
+                    recomputeProjection();
+                });
+            });
+        }
+
+        function toggleSection(id) { const b = document.getElementById(id); b.style.display = b.style.display === 'none' ? 'block' : 'none'; }
+        function setFilter(t) { typeFilter = t; renderResults(lastData); }
+
+        function attachSortHandlers() {
+            document.querySelectorAll('#tableHead th[data-sort]').forEach(th => {
+                th.onclick = () => {
+                    const key = th.dataset.sort;
+                    if (sortKey === key) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+                    else { sortKey = key; sortDir = 'desc'; }
+                    document.querySelectorAll('#tableHead th').forEach(h => h.classList.remove('sorted'));
+                    th.classList.add('sorted');
+                    th.querySelector('.sort-arrow').textContent = sortDir === 'asc' ? '▲' : '▼';
+                    renderTable();
+                };
+            });
+        }
+
+        function getFiltered() {
+            if (!lastData) return [];
+            let rows = lastData.trades.slice();
+            if (typeFilter !== 'all') rows = rows.filter(t => t.type === typeFilter);
+            const dFrom = document.getElementById('f-date-from').value;
+            const dTo = document.getElementById('f-date-to').value;
+            if (dFrom) { const ts = new Date(dFrom).getTime() / 1000; rows = rows.filter(t => t.timestamp >= ts); }
+            if (dTo)   { const ts = new Date(dTo).getTime() / 1000 + 86400; rows = rows.filter(t => t.timestamp < ts); }
+            const tMin = parseFloat(document.getElementById('f-tokens-min').value);
+            const tMax = parseFloat(document.getElementById('f-tokens-max').value);
+            if (!isNaN(tMin)) rows = rows.filter(t => t.token_delta >= tMin);
+            if (!isNaN(tMax)) rows = rows.filter(t => t.token_delta <= tMax);
+            const qMin = parseFloat(document.getElementById('f-quote-min').value);
+            const qMax = parseFloat(document.getElementById('f-quote-max').value);
+            if (!isNaN(qMin)) rows = rows.filter(t => (t.quote_amount_q || 0) >= qMin);
+            if (!isNaN(qMax)) rows = rows.filter(t => (t.quote_amount_q || 0) <= qMax);
+            const pMin = parseFloat(document.getElementById('f-price-min').value);
+            const pMax = parseFloat(document.getElementById('f-price-max').value);
+            if (!isNaN(pMin)) rows = rows.filter(t => (t.price_per_token_q || 0) >= pMin);
+            if (!isNaN(pMax)) rows = rows.filter(t => (t.price_per_token_q || 0) <= pMax);
+            const srcQ = document.getElementById('f-source').value.toLowerCase().trim();
+            if (srcQ) rows = rows.filter(t => (t.source || '').toLowerCase().includes(srcQ));
+            const sigQ = document.getElementById('f-sig').value.toLowerCase().trim();
+            if (sigQ) rows = rows.filter(t => (t.signature || '').toLowerCase().includes(sigQ));
+            rows.sort((a, b) => {
+                let av = a[sortKey], bv = b[sortKey];
+                if (av === undefined || av === null) av = -Infinity;
+                if (bv === undefined || bv === null) bv = -Infinity;
+                if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+                return sortDir === 'asc' ? av - bv : bv - av;
+            });
+            return rows;
+        }
+
+        function renderTable() {
+            const rows = getFiltered();
+            document.getElementById('filteredCount').textContent = `${rows.length} row${rows.length === 1 ? '' : 's'} shown`;
+            const visible = rows.slice(0, 500);
+            document.getElementById('tradesBody').innerHTML = visible.map(t => {
+                const date = new Date(t.timestamp * 1000);
+                const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+                const badgeClass =
+                    t.type === 'buy' ? 'badge-buy' : t.type === 'sell' ? 'badge-sell' :
+                    t.type === 'unpriced_in' ? 'badge-unpriced' : t.type === 'transfer_out' ? 'badge-transfer' :
+                    t.type === 'dca_tx' ? 'badge-dca' : t.type === 'lp_op' ? 'badge-lp' :
+                    t.type === 'airdrop' ? 'badge-airdrop' : 'badge-unpriced';
+                const quoteDisplay = t.quote_amount > 0 ? `${fmt(t.quote_amount, 4)} ${t.quote_symbol}` : '—';
+                const priceDisplay = t.price_per_token > 0 ? `${fmt(t.price_per_token, 8)} ${t.quote_symbol}` : '—';
+                const deltaClass = t.token_delta > 0 ? 'positive' : t.token_delta < 0 ? 'negative' : '';
+                const deltaStr = (t.token_delta > 0 ? '+' : '') + fmt(t.token_delta, 2);
+                return `<tr id="row-${t.signature}" data-sig="${t.signature}">
+                    <td>${dateStr}</td>
+                    <td><span class="badge ${badgeClass}">${t.type}</span></td>
+                    <td><span class="${deltaClass}">${deltaStr}</span></td>
+                    <td>${quoteDisplay}</td>
+                    <td>${priceDisplay}</td>
+                    <td>${t.source || '—'}</td>
+                    <td><a class="sig-link" href="https://solscan.io/tx/${t.signature}" target="_blank">${t.signature.slice(0,8)}...</a></td>
+                </tr>`;
+            }).join('');
+            if (rows.length > 500) document.getElementById('filteredCount').textContent = `${rows.length} matches (showing first 500)`;
+        }
+
+        function resetFilters() {
+            ['f-date-from','f-date-to','f-tokens-min','f-tokens-max','f-quote-min','f-quote-max','f-price-min','f-price-max','f-source','f-sig']
+                .forEach(id => document.getElementById(id).value = '');
+            renderTable();
+        }
+
+        function exportCSV() {
+            const rows = getFiltered();
+            const header = ['Date', 'Type', 'Tokens (Δ)', 'Quote Amount', 'Quote Symbol', 'Price/Token', 'Source', 'Signature'];
+            const lines = [header.join(',')];
+            rows.forEach(t => {
+                const d = new Date(t.timestamp * 1000).toISOString();
+                const f = (s) => `"${String(s ?? '').replace(/"/g, '""')}"`;
+                lines.push([f(d), f(t.type), t.token_delta, t.quote_amount || 0, f(t.quote_symbol || ''),
+                    t.price_per_token || 0, f(t.source || ''), f(t.signature || '')].join(','));
+            });
+            const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = `tracker-events-${Date.now()}.csv`; a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function renderChart(trades, summary) {
+            if (chart) chart.destroy();
+            const q = summary.display_quote;
+            const buys = trades.filter(t => t.type === 'buy' && t.price_per_token_q > 0).sort((a,b) => a.timestamp - b.timestamp);
+            const sells = trades.filter(t => t.type === 'sell' && t.price_per_token_q > 0).sort((a,b) => a.timestamp - b.timestamp);
+
+            function jittered(arr) {
+                const buckets = {};
+                return arr.map(t => {
+                    const key = Math.floor(t.timestamp / 60);
+                    buckets[key] = (buckets[key] || 0) + 1;
+                    return { ...t, jitter: (buckets[key] - 1) * 8 };
+                });
+            }
+            const buysJ = jittered(buys);
+            const sellsJ = jittered(sells);
+
+            let cumCost = 0, cumTok = 0;
+            const runningAvg = buys.map(t => {
+                cumCost += t.quote_amount_q; cumTok += t.token_amount;
+                return { x: new Date(t.timestamp * 1000), y: cumCost / cumTok };
+            });
+            if (runningAvg.length > 0) runningAvg.push({ x: new Date(), y: runningAvg[runningAvg.length - 1].y });
+
+            const allTs = [...buys, ...sells].map(t => t.timestamp);
+            const earliest = allTs.length ? Math.min(...allTs) : Date.now()/1000 - 86400*30;
+            const currentPriceLine = summary.current_token_price > 0 ? [
+                { x: new Date(earliest * 1000), y: summary.current_token_price },
+                { x: new Date(), y: summary.current_token_price }
+            ] : [];
+            const breakEvenLine = summary.break_even_price > 0 ? [
+                { x: new Date(earliest * 1000), y: summary.break_even_price },
+                { x: new Date(), y: summary.break_even_price }
+            ] : [];
+
+            const pointRadius = (c) => Math.max(2, Math.min(9, Math.sqrt(c.raw?.cost || 1) * 0.25));
+            const pointHoverRadius = (c) => Math.max(4, Math.min(13, Math.sqrt(c.raw?.cost || 1) * 0.35));
+
+            const ctx = document.getElementById('tradeChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'scatter',
+                data: {
+                    datasets: [
+                        { label: 'Buys', data: buysJ.map(t => ({
+                                x: new Date((t.timestamp + t.jitter) * 1000), y: t.price_per_token_q,
+                                amount: t.token_amount, cost: t.quote_amount_q,
+                                origQuote: t.quote_amount, origSym: t.quote_symbol,
+                                signature: t.signature, ts: t.timestamp,
+                            })),
+                            backgroundColor: 'rgba(76, 175, 80, 0.45)',
+                            borderColor: 'rgba(76, 175, 80, 0.95)', borderWidth: 1,
+                            pointRadius, pointHoverRadius, order: 1 },
+                        { label: 'Sells', data: sellsJ.map(t => ({
+                                x: new Date((t.timestamp + t.jitter) * 1000), y: t.price_per_token_q,
+                                amount: t.token_amount, cost: t.quote_amount_q,
+                                origQuote: t.quote_amount, origSym: t.quote_symbol,
+                                signature: t.signature, ts: t.timestamp,
+                            })),
+                            backgroundColor: 'rgba(255, 107, 107, 0.45)',
+                            borderColor: 'rgba(255, 107, 107, 0.95)', borderWidth: 1,
+                            pointRadius, pointHoverRadius, order: 1 },
+                        { label: 'Running Avg Cost', type: 'line', data: runningAvg,
+                            borderColor: 'rgba(108, 99, 255, 0.85)', backgroundColor: 'rgba(108, 99, 255, 0.06)',
+                            borderWidth: 2, pointRadius: 0, pointHoverRadius: 0, stepped: 'before', fill: true, order: 2 },
+                        { label: 'Current Price', type: 'line', data: currentPriceLine,
+                            borderColor: 'rgba(255, 215, 0, 0.5)', borderWidth: 1.5, borderDash: [4, 4],
+                            pointRadius: 0, pointHoverRadius: 0, fill: false, order: 3 },
+                        { label: 'Break-even', type: 'line', data: breakEvenLine,
+                            borderColor: 'rgba(255, 152, 0, 0.6)', borderWidth: 1.5, borderDash: [8, 4],
+                            pointRadius: 0, pointHoverRadius: 0, fill: false, order: 3 },
+                    ],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'nearest', intersect: true },
+                    onClick: (evt, elements) => {
+                        if (!elements.length) return;
+                        const e = elements[0];
+                        const point = chart.data.datasets[e.datasetIndex].data[e.index];
+                        if (point && point.signature) scrollToRow(point.signature);
+                    },
+                    scales: {
+                        x: { type: 'time', time: { unit: 'week', displayFormats: { week: 'MMM d', day: 'MMM d', month: 'MMM yy' } },
+                            grid: { color: '#1a1a26', drawTicks: false }, ticks: { color: '#666', font: { size: 11 }, padding: 8 },
+                            border: { display: false } },
+                        y: { title: { display: true, text: `Price (${q})`, color: '#888', font: { size: 12 } },
+                            grid: { color: '#1a1a26', drawTicks: false },
+                            ticks: { color: '#666', font: { size: 11 }, padding: 8,
+                                callback: v => v < 0.001 ? v.toExponential(1) : v.toFixed(v < 1 ? 4 : 2) },
+                            border: { display: false } },
+                    },
+                    plugins: {
+                        legend: { position: 'top', align: 'end',
+                            labels: { color: '#aaa', font: { size: 11 }, usePointStyle: true, padding: 14, boxWidth: 8 } },
+                        tooltip: { backgroundColor: 'rgba(18, 18, 26, 0.97)', titleColor: '#fff', bodyColor: '#ccc',
+                            borderColor: '#2a2a3a', borderWidth: 1, padding: 12, displayColors: false,
+                            titleFont: { size: 12, weight: 'bold' }, bodyFont: { size: 12 },
+                            callbacks: {
+                                title: items => items[0].raw?.ts ? new Date(items[0].raw.ts * 1000).toLocaleString() : '',
+                                label: function(ctx) {
+                                    const d = ctx.raw;
+                                    if (d.amount !== undefined) {
+                                        const lines = [`${ctx.dataset.label}`, `${fmt(d.amount, 2)} tokens @ ${fmt(d.y, 8)} ${q}`, `Total: ${fmt(d.cost, 2)} ${q}`];
+                                        if (d.origSym && d.origSym !== q) lines.push(`(paid ${fmt(d.origQuote, 4)} ${d.origSym})`);
+                                        lines.push('Click to highlight in table');
+                                        return lines;
+                                    }
+                                    return `${ctx.dataset.label}: ${fmt(d.y, 8)} ${q}`;
+                                }
+                            } }
+                    },
+                },
+            });
+        }
+
+        function scrollToRow(signature) {
+            document.querySelectorAll('tr.highlighted').forEach(r => r.classList.remove('highlighted'));
+            const row = document.getElementById(`row-${signature}`);
+            if (!row) {
+                if (typeFilter !== 'all') typeFilter = 'all';
+                resetFilters();
+                renderResults(lastData);
+                setTimeout(() => scrollToRow(signature), 50);
+                return;
+            }
+            row.classList.add('highlighted');
+            row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            setTimeout(() => row.classList.remove('highlighted'), 3000);
+        }
+
+        function openShareModal() {
+            if (!lastData) return;
+            document.getElementById('shareModal').classList.add('show');
+            renderSharePreview();
+            ['inc-pnl','inc-invested','inc-realized','inc-holdings','inc-avgbuy','inc-avgsell','inc-current','inc-tokens','inc-breakeven']
+                .forEach(id => document.getElementById(id).onchange = renderSharePreview);
+        }
+        function closeShareModal() { document.getElementById('shareModal').classList.remove('show'); }
+
+        function renderSharePreview() {
+            const s = lastData.summary;
+            const symbol = lastData.token_symbol || 'TOKEN';
+            const q = s.display_quote;
+            const pnl = s.net_pnl;
+            const pnlClassStr = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '';
+            const inc = id => document.getElementById(id).checked;
+
+            const stats = [];
+            if (inc('inc-invested')) stats.push({ label: 'Total Invested', value: fmtUsd(s.total_invested_usd) });
+            if (inc('inc-realized')) stats.push({ label: 'Realized', value: fmtUsd(s.realized_proceeds_usd) });
+            if (inc('inc-holdings')) stats.push({ label: 'Holdings Value', value: fmtUsd(s.current_value_usd) });
+            if (inc('inc-avgbuy')) stats.push({ label: 'Avg Buy Price', value: fmt(s.spread_avg_buy_price, 6) + ' ' + q });
+            if (inc('inc-avgsell') && s.avg_sell_price > 0) stats.push({ label: 'Avg Sell Price', value: fmt(s.avg_sell_price, 6) + ' ' + q });
+            if (inc('inc-current')) stats.push({ label: 'Current Price', value: fmt(s.current_token_price, 6) + ' ' + q });
+            if (inc('inc-tokens')) stats.push({ label: 'Tokens Held', value: fmt(s.holdings, 0) });
+            if (inc('inc-breakeven') && s.break_even_price > 0) stats.push({ label: 'Break-even', value: fmt(s.break_even_price, 6) + ' ' + q });
+
+            const html = `
+                <div class="share-card" id="shareCardContent">
+                    <div class="share-header">
+                        <div class="share-token">$${symbol}</div>
+                        <div class="share-brand">my P/L</div>
+                    </div>
+                    ${inc('inc-pnl') ? `
+                    <div class="share-pnl-big">
+                        <div class="pnl-amount ${pnlClassStr}">${pnl > 0 ? '+' : ''}${fmtUsd(s.net_pnl_usd)}</div>
+                        <div class="pnl-pct ${pnlClassStr}">${s.net_pnl_pct >= 0 ? '+' : ''}${s.net_pnl_pct.toFixed(1)}%</div>
+                    </div>` : ''}
+                    ${stats.length ? `<div class="share-stats">${stats.map(st => `
+                        <div class="share-stat"><div class="label">${st.label}</div><div class="value">${st.value}</div></div>
+                    `).join('')}</div>` : ''}
+                </div>
+            `;
+            document.getElementById('sharePreview').innerHTML = html;
+        }
+
+        async function downloadShareImage() {
+            const node = document.getElementById('shareCardContent');
+            if (!node) return;
+            try {
+                const canvas = await html2canvas(node, { backgroundColor: null, scale: 2, logging: false, useCORS: true });
+                const link = document.createElement('a');
+                const symbol = (lastData.token_symbol || 'token').toLowerCase();
+                link.download = `${symbol}-pnl-${Date.now()}.png`;
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+            } catch (e) { alert('Failed: ' + e.message); }
+        }
+    </script>
+</body>
+</html>

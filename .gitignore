@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+venv/
+.venv/
+env/
+
+# Secrets — NEVER commit
+.env
+.env.local
+
+# App-local data
+cache/
+
+# Personal dev/diagnostic scripts — contain hardcoded wallet addresses
+funding_diag.py
+keeper_diag.py
+
+# Editor / OS junk
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# Claude Code session state
+.claude/
