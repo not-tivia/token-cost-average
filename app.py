@@ -1135,6 +1135,14 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
     total_pnl = realized_pnl + unrealized_pnl
     usd_mult = 1.0 if display_quote in ('USD', 'USDC') else sol_price_usd
 
+    # Break-even on remaining holdings: price the bag must reach for net P/L = 0.
+    # If realized proceeds already exceed total cost, you're past break-even (clamp to 0).
+    unrecovered_cost = max(0.0, spread_cost - total_sell_revenue)
+    break_even_price = (unrecovered_cost / holdings) if holdings > 0 else 0
+    break_even_pct_above_current = (
+        (break_even_price - current_token_price) / current_token_price * 100
+    ) if current_token_price > 0 else 0
+
     breakdown = {
         'reg_buys': {'tokens': total_bought_reg, 'cost': total_buy_cost_reg,
             'avg': total_buy_cost_reg / total_bought_reg if total_bought_reg > 0 else 0,
@@ -1183,6 +1191,8 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
         'computed_holdings': computed_holdings, 'on_chain_balance': on_chain_balance,
         'reconciliation_diff': diff, 'reconciled': reconciled, 'holdings': holdings,
         'current_token_price': current_token_price, 'current_value': current_value,
+        'break_even_price': break_even_price,
+        'break_even_pct_above_current': break_even_pct_above_current,
         'realized_pnl': realized_pnl, 'unrealized_pnl': unrealized_pnl,
         'total_pnl': total_pnl, 'sol_price_usd': sol_price_usd,
         'total_cost_usd': spread_cost * usd_mult,
