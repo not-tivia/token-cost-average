@@ -1277,6 +1277,296 @@ def get_jupiter_open_limit_orders(wallets, target_mint, target_decimals):
 
 
 # =========================================================================
+# Meteora DLMM positions (on-chain RPC, no HTTP API available)
+# =========================================================================
+# PositionV2 account layout (Anchor IDL):
+#   [0:8]    discriminator  (sha256("account:PositionV2")[0:8] = 75b0d4c7f5b485b6)
+#   [8:40]   lb_pair        (pubkey, 32 bytes)
+#   [40:72]  owner          (pubkey, 32 bytes)
+#   [72:1192] liquidity_shares  (u128[70], 1120 bytes)
+#   [1192:4552] reward_infos    (UserRewardInfo[70], 70*48=3360 bytes)
+#   [4552:7912] fee_infos       (FeeInfo[70], 70*48=3360 bytes)
+#   [7912:7916] lower_bin_id    (i32)
+#   [7916:7920] upper_bin_id    (i32)
+#   ...
+# LbPair account layout (offsets confirmed by scan):
+#   [88:120]  token_x_mint  (pubkey)
+#   [120:152] token_y_mint  (pubkey)
+#   [152:184] reserve_x     (pubkey, token account)
+#   [184:216] reserve_y     (pubkey, token account)
+# BinArray account layout:
+#   [8:16]  index  (i64)
+#   [24:56] lb_pair (pubkey)
+#   [56+]   bins (Bin[70]), each Bin = 144 bytes:
+#             [0:8]   amount_x   (u64, raw)
+#             [8:16]  amount_y   (u64, raw)
+#             [32:48] liquidity_supply (u128)
+
+import base64, struct as _struct, hashlib as _hashlib
+
+def _b58encode(b):
+    """Encode bytes to base58 (Bitcoin alphabet)."""
+    ALPHA = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+    n = int.from_bytes(b, 'big')
+    res = ''
+    while n > 0:
+        n, r = divmod(n, 58)
+        res = ALPHA[r] + res
+    for byte in b:
+        if byte == 0:
+            res = '1' + res
+        else:
+            break
+    return res
+
+def _b58decode(s):
+    """Decode base58 string to 32-byte pubkey."""
+    ALPHA = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+    n = 0
+    for c in s:
+        n = n * 58 + ALPHA.index(c)
+    return n.to_bytes(32, 'big')
+
+_DLMM_POSITION_V2_DISCR_B58 = _b58encode(
+    _hashlib.sha256(b'account:PositionV2').digest()[:8]
+)  # = 'LgkNAEYaVX3' confirmed against 75b0d4c7f5b485b6
+
+_BIN_ARRAY_DISCR_B58 = _b58encode(
+    _hashlib.sha256(b'account:BinArray').digest()[:8]
+)  # = 'GUunkrC2gRJ' confirmed against 5c8e5cdc059446b5
+
+_DLMM_PROGRAM = 'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo'
+_BINS_PER_ARRAY = 70
+_BIN_SIZE = 144          # bytes per Bin struct
+_BINARRAY_HEADER = 56    # bytes before bins[] in BinArray account
+_POSV2_LIQ_OFFSET = 72  # bytes before liquidityShares in PositionV2
+_POSV2_LB_PAIR_OFFSET = 8
+_POSV2_OWNER_OFFSET = 40
+_POSV2_LOWER_BIN_OFFSET = 7912  # after 8+32+32+70*16+70*48+70*48
+_POSV2_UPPER_BIN_OFFSET = 7916
+_LBPAIR_TOKEN_X_OFFSET = 88
+_LBPAIR_TOKEN_Y_OFFSET = 120
+_LBPAIR_RESERVE_X_OFFSET = 152
+_LBPAIR_RESERVE_Y_OFFSET = 184
+
+
+def _rpc_post(payload):
+    """Fire a single JSON-RPC POST against HELIUS_RPC (no retry — callers handle errors)."""
+    resp = requests.post(HELIUS_RPC, json=payload, timeout=20)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _get_program_accounts_pubkeys(program, filters):
+    """Return list of pubkeys for program accounts matching filters (dataSlice=0)."""
+    payload = {
+        'jsonrpc': '2.0', 'id': 1,
+        'method': 'getProgramAccounts',
+        'params': [program, {
+            'encoding': 'base64',
+            'dataSlice': {'offset': 0, 'length': 0},
+            'filters': filters,
+            'withContext': False,
+        }],
+    }
+    result = _rpc_post(payload).get('result', [])
+    return [a['pubkey'] for a in result] if isinstance(result, list) else []
+
+
+def _get_account_data(pubkey):
+    """Return raw bytes for a single account, or None if missing."""
+    payload = {
+        'jsonrpc': '2.0', 'id': 1,
+        'method': 'getAccountInfo',
+        'params': [pubkey, {'encoding': 'base64'}],
+    }
+    d = _rpc_post(payload).get('result', {}).get('value')
+    if not d:
+        return None
+    return base64.b64decode(d['data'][0])
+
+
+def _decode_position_v2(raw):
+    """Parse a PositionV2 account's raw bytes into a minimal dict."""
+    if len(raw) < _POSV2_UPPER_BIN_OFFSET + 4:
+        return None
+    lb_pair = _b58encode(raw[_POSV2_LB_PAIR_OFFSET:_POSV2_LB_PAIR_OFFSET + 32])
+    owner   = _b58encode(raw[_POSV2_OWNER_OFFSET:_POSV2_OWNER_OFFSET + 32])
+    lower   = _struct.unpack_from('<i', raw, _POSV2_LOWER_BIN_OFFSET)[0]
+    upper   = _struct.unpack_from('<i', raw, _POSV2_UPPER_BIN_OFFSET)[0]
+    liq_shares = [
+        int.from_bytes(raw[_POSV2_LIQ_OFFSET + i*16 : _POSV2_LIQ_OFFSET + (i+1)*16], 'little')
+        for i in range(_BINS_PER_ARRAY)
+    ]
+    return {
+        'lb_pair': lb_pair, 'owner': owner,
+        'lower_bin_id': lower, 'upper_bin_id': upper,
+        'liq_shares': liq_shares,
+    }
+
+
+def _decode_lb_pair(raw):
+    """Extract token_x_mint, token_y_mint from an LbPair account."""
+    if len(raw) < _LBPAIR_RESERVE_Y_OFFSET + 32:
+        return None
+    return {
+        'token_x_mint':   _b58encode(raw[_LBPAIR_TOKEN_X_OFFSET:_LBPAIR_TOKEN_X_OFFSET + 32]),
+        'token_y_mint':   _b58encode(raw[_LBPAIR_TOKEN_Y_OFFSET:_LBPAIR_TOKEN_Y_OFFSET + 32]),
+    }
+
+
+def _decode_bin_array(raw):
+    """Return (index, dict of bin_id -> (amount_x_raw, amount_y_raw, liq_supply))."""
+    if len(raw) < _BINARRAY_HEADER:
+        return None, {}
+    index = _struct.unpack_from('<q', raw, 8)[0]
+    bins = {}
+    for slot in range(_BINS_PER_ARRAY):
+        bin_id = index * _BINS_PER_ARRAY + slot
+        off = _BINARRAY_HEADER + slot * _BIN_SIZE
+        if off + _BIN_SIZE > len(raw):
+            break
+        amount_x   = _struct.unpack_from('<Q', raw, off)[0]
+        amount_y   = _struct.unpack_from('<Q', raw, off + 8)[0]
+        liq_supply = int.from_bytes(raw[off + 32 : off + 48], 'little')
+        bins[bin_id] = (amount_x, amount_y, liq_supply)
+    return index, bins
+
+
+def _find_bin_array_accounts(lb_pair_key):
+    """Return all BinArray pubkeys for a given lb_pair via getProgramAccounts."""
+    filters = [
+        {'memcmp': {'bytes': _BIN_ARRAY_DISCR_B58, 'offset': 0}},
+        {'memcmp': {'bytes': lb_pair_key, 'offset': 24}},
+    ]
+    return _get_program_accounts_pubkeys(_DLMM_PROGRAM, filters)
+
+
+def get_dlmm_positions(wallets, target_mint, target_decimals=None):
+    """Fetch Meteora DLMM PositionV2 positions across wallets holding target_mint.
+
+    Uses on-chain RPC (Helius) via getProgramAccounts with PositionV2 discriminator
+    and per-owner memcmp filter. Computes token amounts from BinArray data.
+
+    No public REST API exists for per-owner DLMM positions as of May 2026:
+    - dlmm-api.meteora.ag/* returns 404 on all paths
+    - dlmm.datapi.meteora.ag/portfolio returns empty (not indexed in real time)
+
+    Returns: (positions, error_str)
+      positions: list of dicts, each:
+        { 'wallet': str, 'position_pubkey': str, 'pair_address': str,
+          'tokens': float }   # target_mint amount in this position (human units)
+    """
+    if target_decimals is None:
+        target_decimals = get_token_decimals(target_mint)
+
+    positions = []
+    errors = []
+
+    for wallet in wallets:
+        try:
+            _rate_limit(0.2)
+            # 1. Find all PositionV2 accounts owned by this wallet
+            filters = [
+                {'memcmp': {'bytes': _DLMM_POSITION_V2_DISCR_B58, 'offset': 0}},
+                {'memcmp': {'bytes': wallet, 'offset': _POSV2_OWNER_OFFSET}},
+            ]
+            pos_pubkeys = _get_program_accounts_pubkeys(_DLMM_PROGRAM, filters)
+            print(f'[dlmm] {wallet[:6]}...: {len(pos_pubkeys)} PositionV2 accounts')
+
+            for pos_pubkey in pos_pubkeys:
+                try:
+                    _rate_limit(0.1)
+                    pos_raw = _get_account_data(pos_pubkey)
+                    if not pos_raw:
+                        continue
+                    pos = _decode_position_v2(pos_raw)
+                    if not pos:
+                        continue
+
+                    # 2. Check if this pool involves target_mint
+                    _rate_limit(0.1)
+                    pair_raw = _get_account_data(pos['lb_pair'])
+                    if not pair_raw:
+                        continue
+                    pair_info = _decode_lb_pair(pair_raw)
+                    if not pair_info:
+                        continue
+
+                    is_x = pair_info['token_x_mint'] == target_mint
+                    is_y = pair_info['token_y_mint'] == target_mint
+                    if not is_x and not is_y:
+                        continue  # this pool doesn't involve target_mint
+
+                    # 3. Load BinArray accounts covering this position's bin range
+                    lower = pos['lower_bin_id']
+                    upper = pos['upper_bin_id']
+                    liq_shares = pos['liq_shares']
+
+                    # Determine which BinArray indices cover [lower, upper]
+                    import math
+                    ba_indices_needed = set(
+                        math.floor(b / _BINS_PER_ARRAY)
+                        for b in range(lower, upper + 1)
+                    )
+
+                    _rate_limit(0.1)
+                    ba_pubkeys = _find_bin_array_accounts(pos['lb_pair'])
+                    bin_data = {}  # bin_id -> (amount_x_raw, amount_y_raw, liq_supply)
+                    for ba_pk in ba_pubkeys:
+                        _rate_limit(0.05)
+                        ba_raw = _get_account_data(ba_pk)
+                        if not ba_raw:
+                            continue
+                        ba_index, ba_bins = _decode_bin_array(ba_raw)
+                        if ba_index in ba_indices_needed:
+                            bin_data.update(ba_bins)
+
+                    # 4. Compute user's share per bin
+                    total_target_raw = 0
+                    for i, bin_id in enumerate(range(lower, upper + 1)):
+                        if i >= len(liq_shares):
+                            break
+                        user_share = liq_shares[i]
+                        if user_share == 0:
+                            continue
+                        bin_entry = bin_data.get(bin_id)
+                        if not bin_entry:
+                            continue
+                        amt_x_raw, amt_y_raw, liq_supply = bin_entry
+                        if liq_supply == 0:
+                            continue
+                        if is_x:
+                            total_target_raw += (amt_x_raw * user_share) // liq_supply
+                        else:
+                            total_target_raw += (amt_y_raw * user_share) // liq_supply
+
+                    tokens = total_target_raw / (10 ** target_decimals)
+                    if tokens <= 0:
+                        continue  # empty position
+
+                    positions.append({
+                        'wallet':           wallet,
+                        'position_pubkey':  pos_pubkey,
+                        'pair_address':     pos['lb_pair'],
+                        'tokens':           tokens,
+                    })
+
+                except Exception as e:
+                    errors.append(f'{wallet[:6]}...pos: {e}')
+                    print(f'[dlmm] error decoding position {pos_pubkey}: {e}')
+
+        except Exception as e:
+            errors.append(f'{wallet[:6]}...: {e}')
+            print(f'[dlmm] error for wallet {wallet}: {e}')
+
+    err_str = '; '.join(errors) if errors else None
+    print(f'[dlmm] {len(positions)} DLMM positions across {len(wallets)} wallets'
+          + (f' (errors: {err_str})' if err_str else ''))
+    return positions, err_str
+
+
+# =========================================================================
 # Routes
 # =========================================================================
 @app.route('/')
