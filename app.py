@@ -17,6 +17,10 @@ Backend-only change, index.html unchanged.
 
 import os
 import json
+import math
+import base64
+import struct as _struct
+import hashlib as _hashlib
 import time
 import requests
 from collections import Counter, defaultdict
@@ -1302,8 +1306,6 @@ def get_jupiter_open_limit_orders(wallets, target_mint, target_decimals):
 #             [8:16]  amount_y   (u64, raw)
 #             [32:48] liquidity_supply (u128)
 
-import base64, struct as _struct, hashlib as _hashlib
-
 def _b58encode(b):
     """Encode bytes to base58 (Bitcoin alphabet)."""
     ALPHA = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
@@ -1504,7 +1506,6 @@ def get_dlmm_positions(wallets, target_mint, target_decimals=None):
                     liq_shares = pos['liq_shares']
 
                     # Determine which BinArray indices cover [lower, upper]
-                    import math
                     ba_indices_needed = set(
                         math.floor(b / _BINS_PER_ARRAY)
                         for b in range(lower, upper + 1)
