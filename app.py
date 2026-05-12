@@ -114,6 +114,20 @@ def _save_cache(wallet, data):
 # Rate limiting + retry
 # =========================================================================
 _last_request_time = 0.0
+def _raw_remaining(o, primary, fallback):
+    """Return remaining raw amount as float. Treats key-missing as fallback,
+    but a literal 0 in the primary is respected (do not fall through)."""
+    v = o.get(primary)
+    if v is not None:
+        try: return float(v)
+        except (TypeError, ValueError): pass
+    v = o.get(fallback)
+    if v is not None:
+        try: return float(v)
+        except (TypeError, ValueError): pass
+    return 0.0
+
+
 def _rate_limit(min_gap=0.5):
     global _last_request_time
     now = time.time()
@@ -1201,6 +1215,65 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
         'total_invested_usd': total_invested * usd_mult,
         'realized_proceeds_usd': realized_proceeds * usd_mult,
     }
+
+
+def get_jupiter_open_limit_orders(wallets, target_mint, target_decimals):
+    """Fetch open Jupiter Limit sell orders across the given wallets.
+
+    Returns a list of dicts. Only sell orders (target_mint as input) are kept.
+    Each dict:
+      { 'wallet': str, 'order_pda': str,
+        'tokens_remaining': float,
+        'expected_proceeds_usdc': float,
+        'limit_price': float,            # USDC per target token
+        'setup_ts': int or None }
+
+    Failure mode: returns ([], error_str) if any wallet's fetch fails outright.
+    Partial successes (some wallets ok, others failed) return (orders, error_str).
+
+    API: GET https://api.jup.ag/trigger/v1/getTriggerOrders
+    Params: user=<wallet>&orderStatus=active
+    Key fields: orderKey, inputMint, outputMint, rawRemainingMakingAmount,
+                rawRemainingTakingAmount, createdAt
+    """
+    orders = []
+    errors = []
+    for wallet in wallets:
+        try:
+            _rate_limit(0.2)
+            url = 'https://api.jup.ag/trigger/v1/getTriggerOrders'
+            resp = requests.get(url, params={'user': wallet, 'orderStatus': 'active'}, timeout=20)
+            resp.raise_for_status()
+            payload = resp.json()
+            raw_orders = payload if isinstance(payload, list) else payload.get('orders', [])
+            for o in raw_orders:
+                input_mint  = o.get('inputMint')  or ''
+                if input_mint != target_mint:
+                    continue  # not a sell of our target
+                # rawRemainingMakingAmount / rawRemainingTakingAmount are in smallest units
+                making_raw = _raw_remaining(o, 'rawRemainingMakingAmount', 'makingAmount')
+                taking_raw = _raw_remaining(o, 'rawRemainingTakingAmount', 'takingAmount')
+                # Convert from smallest units
+                tokens_remaining = making_raw / (10 ** target_decimals)
+                # Output is USDC (6 decimals) or USDT (6 decimals)
+                quote_decimals = 6
+                expected_proceeds = taking_raw / (10 ** quote_decimals)
+                limit_price = (expected_proceeds / tokens_remaining) if tokens_remaining > 0 else 0
+                orders.append({
+                    'wallet': wallet,
+                    'order_pda': o.get('orderKey') or '',
+                    'tokens_remaining': tokens_remaining,
+                    'expected_proceeds_usdc': expected_proceeds,
+                    'limit_price': limit_price,
+                    'setup_ts': o.get('createdAt') if o.get('createdAt') is not None else o.get('created_at'),
+                })
+        except Exception as e:
+            errors.append(f'{wallet[:6]}...: {e}')
+            print(f'[limit-api] error for {wallet}: {e}')
+    err_str = '; '.join(errors) if errors else None
+    print(f'[limit-api] {len(orders)} open sell orders across {len(wallets)} wallets'
+          + (f' (errors: {err_str})' if err_str else ''))
+    return orders, err_str
 
 
 # =========================================================================
