@@ -1321,14 +1321,6 @@ def _b58encode(b):
             break
     return res
 
-def _b58decode(s):
-    """Decode base58 string to 32-byte pubkey."""
-    ALPHA = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
-    n = 0
-    for c in s:
-        n = n * 58 + ALPHA.index(c)
-    return n.to_bytes(32, 'big')
-
 _DLMM_POSITION_V2_DISCR_B58 = _b58encode(
     _hashlib.sha256(b'account:PositionV2').digest()[:8]
 )  # = 'LgkNAEYaVX3' confirmed against 75b0d4c7f5b485b6
@@ -1337,7 +1329,6 @@ _BIN_ARRAY_DISCR_B58 = _b58encode(
     _hashlib.sha256(b'account:BinArray').digest()[:8]
 )  # = 'GUunkrC2gRJ' confirmed against 5c8e5cdc059446b5
 
-_DLMM_PROGRAM = 'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo'
 _BINS_PER_ARRAY = 70
 _BIN_SIZE = 144          # bytes per Bin struct
 _BINARRAY_HEADER = 56    # bytes before bins[] in BinArray account
@@ -1353,10 +1344,28 @@ _LBPAIR_RESERVE_Y_OFFSET = 184
 
 
 def _rpc_post(payload):
-    """Fire a single JSON-RPC POST against HELIUS_RPC (no retry — callers handle errors)."""
-    resp = requests.post(HELIUS_RPC, json=payload, timeout=20)
-    resp.raise_for_status()
-    return resp.json()
+    """Fire a JSON-RPC POST against HELIUS_RPC with 429 retry/backoff.
+
+    Raises RuntimeError on JSON-level RPC errors (e.g. invalid params).
+    """
+    delay = 1.0
+    max_retries = 5
+    for attempt in range(max_retries):
+        _rate_limit()
+        resp = requests.post(HELIUS_RPC, json=payload, timeout=20)
+        if resp.status_code == 429:
+            if attempt == max_retries - 1:
+                resp.raise_for_status()
+            print(f'[dlmm][rate-limit] backing off {delay:.1f}s')
+            time.sleep(delay)
+            delay = min(delay * 2, 16)
+            continue
+        resp.raise_for_status()
+        data = resp.json()
+        if 'error' in data:
+            raise RuntimeError(f'RPC error: {data["error"]}')
+        return data
+    return resp.json()  # unreachable but satisfies linter
 
 
 def _get_program_accounts_pubkeys(program, filters):
@@ -1441,7 +1450,7 @@ def _find_bin_array_accounts(lb_pair_key):
         {'memcmp': {'bytes': _BIN_ARRAY_DISCR_B58, 'offset': 0}},
         {'memcmp': {'bytes': lb_pair_key, 'offset': 24}},
     ]
-    return _get_program_accounts_pubkeys(_DLMM_PROGRAM, filters)
+    return _get_program_accounts_pubkeys(METEORA_DLMM, filters)
 
 
 def get_dlmm_positions(wallets, target_mint, target_decimals=None):
@@ -1473,7 +1482,7 @@ def get_dlmm_positions(wallets, target_mint, target_decimals=None):
                 {'memcmp': {'bytes': _DLMM_POSITION_V2_DISCR_B58, 'offset': 0}},
                 {'memcmp': {'bytes': wallet, 'offset': _POSV2_OWNER_OFFSET}},
             ]
-            pos_pubkeys = _get_program_accounts_pubkeys(_DLMM_PROGRAM, filters)
+            pos_pubkeys = _get_program_accounts_pubkeys(METEORA_DLMM, filters)
             print(f'[dlmm] {wallet[:6]}...: {len(pos_pubkeys)} PositionV2 accounts')
 
             for pos_pubkey in pos_pubkeys:
