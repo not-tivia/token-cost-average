@@ -1076,10 +1076,49 @@ def normalize_trade_prices(trades, display_quote, sol_price_usd):
     return trades
 
 
+def build_position_breakdown(wallet_tokens, limit_orders, limit_err,
+                             dlmm_positions, dlmm_err, current_price_usd):
+    """Build the position_breakdown object for the summary.
+
+    All token counts are in human units. Value is computed at current market price.
+    Mutates each order/position to attach a `value_usd` field for frontend convenience.
+    """
+    for o in limit_orders:
+        o['value_usd'] = o['tokens_remaining'] * current_price_usd
+    for p in dlmm_positions:
+        p['value_usd'] = p['tokens'] * current_price_usd
+    limit_tokens   = sum(o['tokens_remaining'] for o in limit_orders)
+    dlmm_tokens    = sum(p['tokens'] for p in dlmm_positions)
+    total_tokens   = wallet_tokens + limit_tokens + dlmm_tokens
+    pending_proceeds = sum(o['expected_proceeds_usdc'] for o in limit_orders)
+    return {
+        'wallet': {
+            'tokens': wallet_tokens,
+            'value_usd': wallet_tokens * current_price_usd,
+        },
+        'limit_orders': {
+            'tokens': limit_tokens,
+            'value_usd': limit_tokens * current_price_usd,
+            'pending_proceeds_usd': pending_proceeds,
+            'orders': limit_orders,
+            'error': limit_err,
+        },
+        'dlmm': {
+            'tokens': dlmm_tokens,
+            'value_usd': dlmm_tokens * current_price_usd,
+            'positions': dlmm_positions,
+            'error': dlmm_err,
+        },
+        'total_tokens':    total_tokens,
+        'total_value_usd': total_tokens * current_price_usd,
+    }
+
+
 def calculate_summary(trades, dca_aggregate, on_chain_balance,
                       current_price_usd, sol_price_usd,
                       auto_funding_usd, display_quote='USDC',
-                      manual_dca_cost=0.0, manual_airdrop_tokens=0.0):
+                      manual_dca_cost=0.0, manual_airdrop_tokens=0.0,
+                      position_breakdown=None):
     regular  = [t for t in trades if t['type'] in ('buy', 'sell', 'unpriced_in', 'transfer_out')]
     dca_txs  = [t for t in trades if t['type'] == 'dca_tx']
     lp_ops   = [t for t in trades if t['type'] == 'lp_op']
@@ -1135,7 +1174,13 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
         diff = on_chain_balance - computed_holdings
         tolerance = max(abs(on_chain_balance) * 0.005, 0.001)
         reconciled = abs(diff) <= tolerance
-    holdings = on_chain_balance if on_chain_balance is not None else computed_holdings
+    # Wallet-only base used for reconciliation banner
+    wallet_only_holdings = on_chain_balance if on_chain_balance is not None else computed_holdings
+    # Total holdings includes off-wallet positions (limit orders, DLMM)
+    if position_breakdown is not None:
+        holdings = position_breakdown['total_tokens']
+    else:
+        holdings = wallet_only_holdings
 
     if display_quote == 'SOL':
         current_token_price = (current_price_usd / sol_price_usd) if sol_price_usd > 0 else 0
@@ -1208,6 +1253,12 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
         'lp_out': sum(t['token_amount'] for t in lp_ops if t['token_delta'] < 0),
         'computed_holdings': computed_holdings, 'on_chain_balance': on_chain_balance,
         'reconciliation_diff': diff, 'reconciled': reconciled, 'holdings': holdings,
+        'wallet_only_holdings': wallet_only_holdings,
+        'position_breakdown': position_breakdown,
+        'pending_limit_proceeds_usd': (
+            position_breakdown['limit_orders']['pending_proceeds_usd']
+            if position_breakdown else 0
+        ),
         'current_token_price': current_token_price, 'current_value': current_value,
         'break_even_price': break_even_price,
         'break_even_pct_above_current': break_even_pct_above_current,
@@ -1661,6 +1712,24 @@ def analyze():
             if bal is not None: on_chain += bal; any_ok = True
         if not any_ok: on_chain = None
 
+        # NEW: fetch open Jupiter Limit sell orders (off-wallet bucket)
+        open_limit_orders, open_limit_err = get_jupiter_open_limit_orders(
+            wallets, target_mint, target_decimals
+        )
+        # NEW: fetch Meteora DLMM positions (off-wallet bucket)
+        dlmm_positions, dlmm_err = get_dlmm_positions(
+            wallets, target_mint, target_decimals
+        )
+
+        # NEW: build the position breakdown
+        wallet_tokens_for_breakdown = on_chain if on_chain is not None else 0.0
+        position_breakdown = build_position_breakdown(
+            wallet_tokens_for_breakdown,
+            open_limit_orders, open_limit_err,
+            dlmm_positions, dlmm_err,
+            token_price_usd,
+        )
+
         # v3.12: pair limit-order setups with their fills via Reserve token accounts
         limit_buy_orders, limit_sell_orders = analyze_limit_orders(
             unique, target_mint, wallet_set, sol_price_usd
@@ -1672,6 +1741,7 @@ def analyze():
             token_price_usd, sol_price_usd,
             auto_funding_usd, display_quote,
             manual_dca_cost, manual_airdrop_tokens,
+            position_breakdown=position_breakdown,
         )
 
         lp_breakdown = analyze_lp_activity(trades, sol_price_usd, token_price_usd)
