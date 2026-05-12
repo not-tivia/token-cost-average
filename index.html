@@ -131,6 +131,19 @@
         .lp-pnl-row.big { padding: 10px 0; border-top: 1px solid #1e1e2e; margin-top: 8px; }
         .lp-pnl-row.big .lab { font-size: 13px; color: #aaa; font-weight: 600; }
         .lp-pnl-row.big .val { font-size: 22px; font-weight: 700; }
+        .position-section { background: #12121a; border: 1px solid #1e1e2e; border-radius: 14px; padding: 20px; margin-bottom: 24px; }
+        .position-section h2 { font-size: 15px; margin-bottom: 16px; color: #ccc; font-weight: 600; }
+        .position-row { display: grid; grid-template-columns: 1.4fr 1fr 1fr 0.6fr; gap: 12px; padding: 10px 0; border-bottom: 1px solid #1a1a26; align-items: center; font-size: 13px; }
+        .position-row:last-child { border-bottom: none; }
+        .position-row.total { font-weight: 700; padding-top: 14px; border-top: 2px solid #1e1e2e; }
+        .position-row .loc { color: #ccc; }
+        .position-row .tok, .position-row .val { color: #888; font-family: 'JetBrains Mono', monospace; font-size: 12px; text-align: right; }
+        .position-row .pct { color: #6c63ff; font-weight: 600; text-align: right; }
+        .position-row .badge { display: inline-block; margin-left: 8px; padding: 2px 6px; background: #1a1a26; color: #888; border-radius: 4px; font-size: 11px; font-weight: 500; }
+        .position-row .err { color: #ff7676; font-size: 11px; margin-top: 4px; }
+        .position-pending { margin-top: 16px; padding: 12px; background: #0a0a0f; border: 1px solid #1a1a26; border-radius: 8px; display: flex; justify-content: space-between; align-items: baseline; }
+        .position-pending .k { color: #888; font-size: 12px; }
+        .position-pending .v { color: #4caf50; font-weight: 700; font-family: 'JetBrains Mono', monospace; font-size: 14px; }
         .lp-pnl-row .lab { font-size: 12px; color: #888; }
         .lp-pnl-row .val { font-size: 14px; color: #ccc; font-family: 'JetBrains Mono', monospace; }
         .lp-disclaimer { color: #666; font-size: 11px; margin-top: 12px; line-height: 1.5; }
@@ -325,6 +338,7 @@
 
             <div id="impactSection" class="impact-section" style="display:none;"></div>
 
+            <div id="positionSection" class="position-section" style="display:none;"></div>
             <div id="lpSection" class="lp-section" style="display:none;"></div>
 
             <div id="insightsSection" class="insights-section" style="display:none;">
@@ -788,6 +802,62 @@
 
         function setImpactMode(mode) { impactMode = mode; renderImpact(); }
 
+        function renderPositionBreakdown(summary) {
+            const pb = summary && summary.position_breakdown;
+            const el = document.getElementById('positionSection');
+            if (!pb || pb.total_tokens <= 0) { el.style.display = 'none'; return; }
+            el.style.display = 'block';
+            const total = pb.total_tokens || 0;
+            const pct = (t) => total > 0 ? ((t / total) * 100).toFixed(1) : '0.0';
+            const rows = [
+                {
+                    key: 'wallet', label: 'Wallet',
+                    tokens: pb.wallet.tokens, value: pb.wallet.value_usd,
+                    badge: null, error: null,
+                },
+                {
+                    key: 'limit_orders', label: 'In Limit Orders',
+                    tokens: pb.limit_orders.tokens, value: pb.limit_orders.value_usd,
+                    badge: (pb.limit_orders.orders || []).length
+                        ? `${pb.limit_orders.orders.length} open` : null,
+                    error: pb.limit_orders.error,
+                },
+                {
+                    key: 'dlmm', label: 'In DLMM Position',
+                    tokens: pb.dlmm.tokens, value: pb.dlmm.value_usd,
+                    badge: (pb.dlmm.positions || []).length
+                        ? `${pb.dlmm.positions.length} position${pb.dlmm.positions.length > 1 ? 's' : ''}` : null,
+                    error: pb.dlmm.error,
+                },
+            ];
+            const rowHtml = (r) => `
+                <div class="position-row">
+                    <div class="loc">${r.label}${r.badge ? `<span class="badge">${r.badge}</span>` : ''}
+                        ${r.error ? `<div class="err">⚠ ${r.error}</div>` : ''}
+                    </div>
+                    <div class="tok">${fmt(r.tokens, 2)} tok</div>
+                    <div class="val">${fmtUsd(r.value)}</div>
+                    <div class="pct">${pct(r.tokens)}%</div>
+                </div>`;
+            const pending = pb.limit_orders.pending_proceeds_usd || 0;
+            el.innerHTML = `
+                <h2>Position Breakdown</h2>
+                ${rows.map(rowHtml).join('')}
+                <div class="position-row total">
+                    <div class="loc">Total</div>
+                    <div class="tok">${fmt(pb.total_tokens, 2)} tok</div>
+                    <div class="val">${fmtUsd(pb.total_value_usd)}</div>
+                    <div class="pct">100%</div>
+                </div>
+                ${pending > 0 ? `
+                    <div class="position-pending">
+                        <div class="k">If all open limit orders fill at their limit price:</div>
+                        <div class="v">${fmtUsd(pending)}</div>
+                    </div>
+                ` : ''}
+            `;
+        }
+
         function renderLpBreakdown(lp, summary) {
             const el = document.getElementById('lpSection');
             if (!lp || lp.count === 0) { el.style.display = 'none'; return; }
@@ -907,6 +977,7 @@
             renderPnlHero(summary);
             renderBreakdown(summary);
             renderImpact();
+            renderPositionBreakdown(summary);
             renderLpBreakdown(lp_breakdown, summary);
             renderInsights();
 
