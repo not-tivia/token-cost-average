@@ -1081,12 +1081,10 @@ def build_position_breakdown(wallet_tokens, limit_orders, limit_err,
     """Build the position_breakdown object for the summary.
 
     All token counts are in human units. Value is computed at current market price.
-    Mutates each order/position to attach a `value_usd` field for frontend convenience.
+    Each order/position in the returned structure carries a `value_usd` field for frontend convenience.
     """
-    for o in limit_orders:
-        o['value_usd'] = o['tokens_remaining'] * current_price_usd
-    for p in dlmm_positions:
-        p['value_usd'] = p['tokens'] * current_price_usd
+    limit_orders   = [{**o, 'value_usd': o['tokens_remaining'] * current_price_usd} for o in limit_orders]
+    dlmm_positions = [{**p, 'value_usd': p['tokens'] * current_price_usd}            for p in dlmm_positions]
     limit_tokens   = sum(o['tokens_remaining'] for o in limit_orders)
     dlmm_tokens    = sum(p['tokens'] for p in dlmm_positions)
     total_tokens   = wallet_tokens + limit_tokens + dlmm_tokens
@@ -1712,17 +1710,32 @@ def analyze():
             if bal is not None: on_chain += bal; any_ok = True
         if not any_ok: on_chain = None
 
-        # NEW: fetch open Jupiter Limit sell orders (off-wallet bucket)
+        # fetch open Jupiter Limit sell orders (off-wallet bucket)
         open_limit_orders, open_limit_err = get_jupiter_open_limit_orders(
             wallets, target_mint, target_decimals
         )
-        # NEW: fetch Meteora DLMM positions (off-wallet bucket)
+        # fetch Meteora DLMM positions (off-wallet bucket)
         dlmm_positions, dlmm_err = get_dlmm_positions(
             wallets, target_mint, target_decimals
         )
 
-        # NEW: build the position breakdown
-        wallet_tokens_for_breakdown = on_chain if on_chain is not None else 0.0
+        # build the position breakdown
+        # Tx-derived wallet estimate, used as a fallback when on-chain RPC failed.
+        # Mirrors the computed_holdings formula in calculate_summary.
+        _regular   = [t for t in trades if t['type'] in ('buy', 'sell', 'unpriced_in', 'transfer_out')]
+        _dca_txs   = [t for t in trades if t['type'] == 'dca_tx']
+        _lp_ops    = [t for t in trades if t['type'] == 'lp_op']
+        _airdrops  = [t for t in trades if t['type'] == 'airdrop']
+        tx_wallet_estimate = (
+            sum(t['token_amount'] for t in _regular if t['type'] == 'buy')
+            + sum(t['token_amount'] for t in _regular if t['type'] == 'unpriced_in')
+            - sum(t['token_amount'] for t in _regular if t['type'] == 'sell')
+            - sum(t['token_amount'] for t in _regular if t['type'] == 'transfer_out')
+            + sum(t['token_delta'] for t in _dca_txs)
+            + sum(t['token_delta'] for t in _lp_ops)
+            + sum(t['token_delta'] for t in _airdrops)
+        )
+        wallet_tokens_for_breakdown = on_chain if on_chain is not None else tx_wallet_estimate
         position_breakdown = build_position_breakdown(
             wallet_tokens_for_breakdown,
             open_limit_orders, open_limit_err,
