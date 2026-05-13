@@ -514,6 +514,7 @@
                 <label class="check"><input type="checkbox" id="inc-current"> Current Price</label>
                 <label class="check"><input type="checkbox" id="inc-tokens"> Token Count</label>
                 <label class="check"><input type="checkbox" id="inc-breakeven"> Break-even Price</label>
+                <label class="check"><input type="checkbox" id="inc-pending"> If All Sell Orders Fill</label>
             </div>
             <div id="sharePreview" class="share-canvas-wrap"></div>
             <div class="modal-actions">
@@ -1508,7 +1509,7 @@
             if (!lastData) return;
             document.getElementById('shareModal').classList.add('show');
             renderSharePreview();
-            ['inc-pnl','inc-invested','inc-realized','inc-holdings','inc-avgbuy','inc-avgsell','inc-current','inc-tokens','inc-breakeven']
+            ['inc-pnl','inc-invested','inc-realized','inc-holdings','inc-avgbuy','inc-avgsell','inc-current','inc-tokens','inc-breakeven','inc-pending']
                 .forEach(id => document.getElementById(id).onchange = renderSharePreview);
         }
         function closeShareModal() { document.getElementById('shareModal').classList.remove('show'); }
@@ -1530,6 +1531,7 @@
             if (inc('inc-current')) stats.push({ label: 'Current Price', value: fmt(s.current_token_price, 6) + ' ' + q });
             if (inc('inc-tokens')) stats.push({ label: 'Tokens Held', value: fmt(s.holdings, 0) });
             if (inc('inc-breakeven') && s.break_even_price > 0) stats.push({ label: 'Break-even', value: fmt(s.break_even_price, 6) + ' ' + q });
+            if (inc('inc-pending') && s.pending_limit_proceeds_usd > 0) stats.push({ label: 'If All Sell Orders Fill', value: fmtUsd(s.pending_limit_proceeds_usd) });
 
             const html = `
                 <div class="share-card" id="shareCardContent">
