@@ -144,6 +144,16 @@
         .position-pending { margin-top: 16px; padding: 12px; background: #0a0a0f; border: 1px solid #1a1a26; border-radius: 8px; display: flex; justify-content: space-between; align-items: baseline; }
         .position-pending .k { color: #888; font-size: 12px; }
         .position-pending .v { color: #4caf50; font-weight: 700; font-family: 'JetBrains Mono', monospace; font-size: 14px; }
+        .position-row { cursor: default; }
+        .position-row.expandable { cursor: pointer; }
+        .position-row.expandable:hover { background: #161622; }
+        .position-row .caret { display: inline-block; margin-right: 6px; color: #555; transition: transform 0.15s; font-size: 10px; }
+        .position-row.open .caret { transform: rotate(90deg); color: #6c63ff; }
+        .position-sublist { padding: 8px 0 12px 24px; background: #0a0a0f; border-bottom: 1px solid #1a1a26; font-size: 12px; font-family: 'JetBrains Mono', monospace; color: #aaa; display: none; }
+        .position-sublist.open { display: block; }
+        .position-sublist-row { padding: 4px 0; display: flex; justify-content: space-between; gap: 12px; }
+        .position-sublist-row .left { color: #888; }
+        .position-sublist-row .right { color: #ccc; }
         .lp-pnl-row .lab { font-size: 12px; color: #888; }
         .lp-pnl-row .val { font-size: 14px; color: #ccc; font-family: 'JetBrains Mono', monospace; }
         .lp-disclaimer { color: #666; font-size: 11px; margin-top: 12px; line-height: 1.5; }
@@ -809,36 +819,55 @@
             el.style.display = 'block';
             const total = pb.total_tokens || 0;
             const pct = (t) => total > 0 ? ((t / total) * 100).toFixed(1) : '0.0';
+
+            const limitSublist = (pb.limit_orders.orders || []).map(o => {
+                const ts = o.setup_ts ? new Date(o.setup_ts * 1000).toLocaleString() : '';
+                return `<div class="position-sublist-row">
+                    <div class="left">${ts || o.order_pda.slice(0, 8) + '...'}  ·  ${fmt(o.tokens_remaining, 2)} tok @ $${fmt(o.limit_price, 6)}</div>
+                    <div class="right">-> ${fmtUsd(o.expected_proceeds_usdc)}</div>
+                </div>`;
+            }).join('');
+
+            const dlmmSublist = (pb.dlmm.positions || []).map(p => {
+                const pairShort = p.pair_address ? p.pair_address.slice(0, 8) + '...' : '?';
+                return `<div class="position-sublist-row">
+                    <div class="left">pair ${pairShort}  ·  ${fmt(p.tokens, 4)} tok</div>
+                    <div class="right">${fmtUsd(p.value_usd)}</div>
+                </div>`;
+            }).join('');
+
             const rows = [
-                {
-                    key: 'wallet', label: 'Wallet',
-                    tokens: pb.wallet.tokens, value: pb.wallet.value_usd,
-                    badge: null, error: null,
-                },
-                {
-                    key: 'limit_orders', label: 'In Limit Orders',
-                    tokens: pb.limit_orders.tokens, value: pb.limit_orders.value_usd,
-                    badge: (pb.limit_orders.orders || []).length
-                        ? `${pb.limit_orders.orders.length} open` : null,
-                    error: pb.limit_orders.error,
-                },
-                {
-                    key: 'dlmm', label: 'In DLMM Position',
-                    tokens: pb.dlmm.tokens, value: pb.dlmm.value_usd,
-                    badge: (pb.dlmm.positions || []).length
-                        ? `${pb.dlmm.positions.length} position${pb.dlmm.positions.length > 1 ? 's' : ''}` : null,
-                    error: pb.dlmm.error,
-                },
+                { key: 'wallet', label: 'Wallet',
+                  tokens: pb.wallet.tokens, value: pb.wallet.value_usd,
+                  badge: null, error: null, sublist: '' },
+                { key: 'limit_orders', label: 'In Limit Orders',
+                  tokens: pb.limit_orders.tokens, value: pb.limit_orders.value_usd,
+                  badge: (pb.limit_orders.orders || []).length
+                      ? `${pb.limit_orders.orders.length} open` : null,
+                  error: pb.limit_orders.error, sublist: limitSublist },
+                { key: 'dlmm', label: 'In DLMM Position',
+                  tokens: pb.dlmm.tokens, value: pb.dlmm.value_usd,
+                  badge: (pb.dlmm.positions || []).length
+                      ? `${pb.dlmm.positions.length} position${pb.dlmm.positions.length > 1 ? 's' : ''}` : null,
+                  error: pb.dlmm.error, sublist: dlmmSublist },
             ];
-            const rowHtml = (r) => `
-                <div class="position-row">
-                    <div class="loc">${r.label}${r.badge ? `<span class="badge">${r.badge}</span>` : ''}
+
+            const rowHtml = (r) => {
+                const expandable = r.sublist && r.sublist.length > 0;
+                return `
+                <div class="position-row ${expandable ? 'expandable' : ''}" data-key="${r.key}"
+                     ${expandable ? `onclick="togglePositionRow('${r.key}')"` : ''}>
+                    <div class="loc">
+                        ${expandable ? '<span class="caret">▶</span>' : ''}${r.label}${r.badge ? `<span class="badge">${r.badge}</span>` : ''}
                         ${r.error ? `<div class="err">⚠ ${r.error}</div>` : ''}
                     </div>
                     <div class="tok">${fmt(r.tokens, 2)} tok</div>
                     <div class="val">${fmtUsd(r.value)}</div>
                     <div class="pct">${pct(r.tokens)}%</div>
-                </div>`;
+                </div>
+                ${expandable ? `<div class="position-sublist" data-sublist="${r.key}">${r.sublist}</div>` : ''}`;
+            };
+
             const pending = pb.limit_orders.pending_proceeds_usd || 0;
             el.innerHTML = `
                 <h2>Position Breakdown</h2>
@@ -856,6 +885,14 @@
                     </div>
                 ` : ''}
             `;
+        }
+
+        function togglePositionRow(key) {
+            const row = document.querySelector(`.position-row[data-key="${key}"]`);
+            const sub = document.querySelector(`.position-sublist[data-sublist="${key}"]`);
+            if (!row || !sub) return;
+            row.classList.toggle('open');
+            sub.classList.toggle('open');
         }
 
         function renderLpBreakdown(lp, summary) {
