@@ -823,8 +823,16 @@
 
             const limitSublist = (pb.limit_orders.orders || []).map(o => {
                 const ts = o.setup_ts ? new Date(o.setup_ts * 1000).toLocaleString() : '';
+                const pdaShort = (o.order_pda || '').slice(0, 8) + '...';
+                if (o.source === 'on_chain') {
+                    // Auto-detected maker token account — price/proceeds unknown
+                    return `<div class="position-sublist-row">
+                        <div class="left">escrow ${pdaShort}  ·  ${fmt(o.tokens_remaining, 2)} tok</div>
+                        <div class="right">${fmtUsd(o.tokens_remaining * (lastData && lastData.summary ? lastData.summary.current_token_price : 0))}</div>
+                    </div>`;
+                }
                 return `<div class="position-sublist-row">
-                    <div class="left">${ts || o.order_pda.slice(0, 8) + '...'}  ·  ${fmt(o.tokens_remaining, 2)} tok @ $${fmt(o.limit_price, 6)}</div>
+                    <div class="left">${ts || pdaShort}  ·  ${fmt(o.tokens_remaining, 2)} tok @ $${fmt(o.limit_price, 6)}</div>
                     <div class="right">-> ${fmtUsd(o.expected_proceeds_usdc)}</div>
                 </div>`;
             }).join('');
