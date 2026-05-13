@@ -27,6 +27,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
+from solders.pubkey import Pubkey as _SoldersPubkey
 
 load_dotenv()
 
@@ -203,21 +204,66 @@ def get_all_transactions_cached(wallet, max_pages=100, force_fresh=False):
     return cached_txs
 
 
-def get_token_balance_on_chain(wallet, mint):
+_TOKEN_PROGRAM_PUBKEY = _SoldersPubkey.from_string('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+_ATA_PROGRAM_PUBKEY   = _SoldersPubkey.from_string('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL')
+
+
+def _derive_ata(wallet, mint):
+    """Return the canonical Associated Token Account address for (wallet, mint)."""
+    w = _SoldersPubkey.from_string(wallet)
+    m = _SoldersPubkey.from_string(mint)
+    ata, _ = _SoldersPubkey.find_program_address(
+        [bytes(w), bytes(_TOKEN_PROGRAM_PUBKEY), bytes(m)],
+        _ATA_PROGRAM_PUBKEY,
+    )
+    return str(ata)
+
+
+def get_wallet_token_split(wallet, mint):
+    """List the wallet's SPL token accounts for mint, split ATA vs maker accounts.
+
+    Returns (ata_balance, maker_accounts) where:
+      ata_balance     = float, tokens in the canonical ATA (0 if missing)
+      maker_accounts  = list of {'token_account': pubkey_str, 'tokens': float}
+
+    Maker accounts are non-ATA token accounts owned by the wallet — typically
+    seed-derived escrows holding tokens locked in pending Jupiter limit orders.
+
+    Returns (None, None) on RPC failure.
+    """
     payload = {"jsonrpc": "2.0", "id": 1, "method": "getTokenAccountsByOwner",
                "params": [wallet, {"mint": mint}, {"encoding": "jsonParsed"}]}
     try:
         resp = _request_with_retry('POST', HELIUS_RPC, json=payload, timeout=15)
         resp.raise_for_status()
         data = resp.json()
-        total = 0.0
+        ata = _derive_ata(wallet, mint)
+        ata_balance = 0.0
+        maker_accounts = []
         for acct in data.get('result', {}).get('value', []) or []:
+            pk = acct.get('pubkey')
             info = acct.get('account', {}).get('data', {}).get('parsed', {}).get('info', {})
             ui_amt = info.get('tokenAmount', {}).get('uiAmount')
-            if ui_amt is not None: total += float(ui_amt)
-        return total
+            if ui_amt is None: continue
+            amt = float(ui_amt)
+            if pk == ata:
+                ata_balance = amt
+            elif amt > 0:
+                maker_accounts.append({'token_account': pk, 'tokens': amt})
+        return ata_balance, maker_accounts
     except Exception as e:
-        print(f'[balance] error: {e}'); return None
+        print(f'[balance] error: {e}'); return None, None
+
+
+def get_token_balance_on_chain(wallet, mint):
+    """Total CARDS held by wallet across all its token accounts (ATA + makers).
+
+    Kept for compatibility with calculate_summary's reconcile banner.
+    """
+    ata_balance, makers = get_wallet_token_split(wallet, mint)
+    if ata_balance is None:
+        return None
+    return ata_balance + sum(m['tokens'] for m in (makers or []))
 
 
 def get_token_decimals(mint):
@@ -1704,16 +1750,38 @@ def analyze():
         else:
             dca_aggregate = api_dca
 
-        on_chain = 0.0; any_ok = False
+        # Per-wallet split: ATA balance (wallet bucket) vs maker token accounts
+        # (locked in Jupiter limit-order escrows). Maker accounts are non-ATA
+        # token accounts owned by the wallet — Jupiter creates one per open order.
+        ata_total = 0.0; on_chain_makers = []; any_ok = False
         for w in wallets:
-            bal = get_token_balance_on_chain(w, target_mint)
-            if bal is not None: on_chain += bal; any_ok = True
-        if not any_ok: on_chain = None
+            ata_bal, makers = get_wallet_token_split(w, target_mint)
+            if ata_bal is not None:
+                ata_total += ata_bal
+                for m in makers:
+                    on_chain_makers.append({
+                        'wallet': w,
+                        'order_pda': m['token_account'],
+                        'tokens_remaining': m['tokens'],
+                        'expected_proceeds_usdc': 0.0,  # unknown without decoding Jupiter order account
+                        'limit_price': 0.0,
+                        'setup_ts': None,
+                        'source': 'on_chain',
+                    })
+                any_ok = True
+        # 'on_chain' (full wallet balance incl. makers) is used by the reconcile banner
+        on_chain = (ata_total + sum(m['tokens_remaining'] for m in on_chain_makers)) if any_ok else None
 
-        # fetch open Jupiter Limit sell orders (off-wallet bucket)
+        # fetch open Jupiter Limit sell orders via API (covers the current
+        # Trigger Orders product; legacy maker accounts are auto-detected above)
         open_limit_orders, open_limit_err = get_jupiter_open_limit_orders(
             wallets, target_mint, target_decimals
         )
+        # tag API-sourced orders so the frontend can distinguish them
+        for o in open_limit_orders:
+            o.setdefault('source', 'api')
+        # merge API orders + on-chain detected maker accounts
+        open_limit_orders = open_limit_orders + on_chain_makers
         # fetch Meteora DLMM positions (off-wallet bucket)
         dlmm_positions, dlmm_err = get_dlmm_positions(
             wallets, target_mint, target_decimals
@@ -1735,7 +1803,10 @@ def analyze():
             + sum(t['token_delta'] for t in _lp_ops)
             + sum(t['token_delta'] for t in _airdrops)
         )
-        wallet_tokens_for_breakdown = on_chain if on_chain is not None else tx_wallet_estimate
+        # Wallet bucket = ATA-only balances (excludes maker escrows which go
+        # into the limit_orders bucket). Falls back to tx-derived estimate if
+        # the on-chain RPC failed entirely.
+        wallet_tokens_for_breakdown = ata_total if any_ok else tx_wallet_estimate
         position_breakdown = build_position_breakdown(
             wallet_tokens_for_breakdown,
             open_limit_orders, open_limit_err,
