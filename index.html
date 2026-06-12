@@ -204,6 +204,7 @@
         .badge-transfer { background: #2a2a1a; color: #ffd54f; }
         .badge-dca { background: #2a1a3a; color: #ba68c8; }
         .badge-lp { background: #1a3a3a; color: #4dd0e1; }
+        .badge-claim { background: #14331f; color: #66bb6a; }
         .badge-airdrop { background: #3a1a2a; color: #f48fb1; }
         .sig-link { color: #6c63ff; text-decoration: none; font-family: monospace; font-size: 12px; }
         .sig-link:hover { text-decoration: underline; }
@@ -1338,18 +1339,35 @@
             document.getElementById('tradesBody').innerHTML = visible.map(t => {
                 const date = new Date(t.timestamp * 1000);
                 const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+                const isClaim = t.type === 'lp_op' && t.lp_action === 'claim';
                 const badgeClass =
                     t.type === 'buy' ? 'badge-buy' : t.type === 'sell' ? 'badge-sell' :
                     t.type === 'unpriced_in' ? 'badge-unpriced' : t.type === 'transfer_out' ? 'badge-transfer' :
-                    t.type === 'dca_tx' ? 'badge-dca' : t.type === 'lp_op' ? 'badge-lp' :
+                    t.type === 'dca_tx' ? 'badge-dca' : isClaim ? 'badge-claim' : t.type === 'lp_op' ? 'badge-lp' :
                     t.type === 'airdrop' ? 'badge-airdrop' : 'badge-unpriced';
-                const quoteDisplay = t.quote_amount > 0 ? `${fmt(t.quote_amount, 4)} ${t.quote_symbol}` : '—';
+                const badgeText = isClaim ? 'claim' : t.type;
+                const tokSym = (lastData && lastData.token_symbol) || 'tokens';
+                // lp_op / dca_tx carry their quote leg as signed *_delta fields, not quote_amount,
+                // so the Quote column was blank for fee claims, LP add/remove, and keeper fills.
+                // Surface those legs (e.g. a fee claim shows "+454.94 USDC" beside "+987.85 CARDS").
+                let quoteDisplay;
+                if (t.quote_amount > 0) {
+                    quoteDisplay = `${fmt(t.quote_amount, 4)} ${t.quote_symbol}`;
+                } else {
+                    const legs = [];
+                    const sgn = (v) => (v > 0 ? '+' : '');
+                    if (t.usdc_delta) legs.push(`${sgn(t.usdc_delta)}${fmt(t.usdc_delta, 2)} USDC`);
+                    if (t.usdt_delta) legs.push(`${sgn(t.usdt_delta)}${fmt(t.usdt_delta, 2)} USDT`);
+                    if (t.sol_delta)  legs.push(`${sgn(t.sol_delta)}${fmt(t.sol_delta, 4)} SOL`);
+                    quoteDisplay = legs.length ? legs.join(', ') : '—';
+                }
                 const priceDisplay = t.price_per_token > 0 ? `${fmt(t.price_per_token, 8)} ${t.quote_symbol}` : '—';
                 const deltaClass = t.token_delta > 0 ? 'positive' : t.token_delta < 0 ? 'negative' : '';
-                const deltaStr = (t.token_delta > 0 ? '+' : '') + fmt(t.token_delta, 2);
+                const deltaStr = ((t.token_delta > 0 ? '+' : '') + fmt(t.token_delta, 2)) +
+                    (t.token_delta !== 0 ? ` ${tokSym}` : '');
                 return `<tr id="row-${t.signature}" data-sig="${t.signature}">
                     <td>${dateStr}</td>
-                    <td><span class="badge ${badgeClass}">${t.type}</span></td>
+                    <td><span class="badge ${badgeClass}">${badgeText}</span></td>
                     <td><span class="${deltaClass}">${deltaStr}</span></td>
                     <td>${quoteDisplay}</td>
                     <td>${priceDisplay}</td>
