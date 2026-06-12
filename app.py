@@ -317,6 +317,92 @@ def _price_from_coingecko_sol():
     except Exception: return 0.0
 
 
+# =========================================================================
+# v3.13: GeckoTerminal daily price history (market line on the trade chart)
+# =========================================================================
+GECKOTERMINAL_BASE = 'https://api.geckoterminal.com/api/v2'
+
+
+def _pricehist_cache_path(mint):
+    CACHE_DIR.mkdir(exist_ok=True)
+    return CACHE_DIR / f'price_history_{mint}.json'
+
+
+def _gecko_top_pool(mint):
+    """Address of the deepest-liquidity Solana pool trading `mint`, or ''."""
+    try:
+        resp = requests.get(
+            f'{GECKOTERMINAL_BASE}/networks/solana/tokens/{mint}/pools',
+            params={'page': 1}, timeout=10,
+        )
+        if resp.status_code != 200: return ''
+        pools = resp.json().get('data', []) or []
+        if not pools: return ''
+        best = max(pools, key=lambda p: float(p.get('attributes', {}).get('reserve_in_usd', 0) or 0))
+        return best.get('attributes', {}).get('address', '') or ''
+    except Exception:
+        return ''
+
+
+def _gecko_daily_closes(pool, limit=1000):
+    """[[unix_ts, close_usd], ...] ascending, or [] on any failure."""
+    try:
+        resp = requests.get(
+            f'{GECKOTERMINAL_BASE}/networks/solana/pools/{pool}/ohlcv/day',
+            params={'aggregate': 1, 'limit': limit}, timeout=15,
+        )
+        if resp.status_code != 200: return []
+        rows = resp.json().get('data', {}).get('attributes', {}).get('ohlcv_list', []) or []
+        out = [[int(r[0]), float(r[4])] for r in rows if r and len(r) >= 5 and r[4]]
+        out.sort(key=lambda c: c[0])
+        return out
+    except Exception:
+        return []
+
+
+def get_price_history_usd(mint, earliest_ts, force_fresh=False):
+    """Daily [ts, close_usd] pairs from ~7 days before earliest_ts to now.
+
+    Cached in cache/price_history_<mint>.json. If the cache already holds
+    today's (UTC) candle, no network call is made. On any failure the cached
+    candles (or []) are returned — this function must never raise, so price
+    problems can't break the P/L analysis.
+    """
+    path = _pricehist_cache_path(mint)
+    cached = {'pool': '', 'updated_ts': 0, 'candles': []}
+    if path.exists() and not force_fresh:
+        try:
+            cached = json.loads(path.read_text())
+        except Exception:
+            pass
+    candles = {int(c[0]): float(c[1]) for c in cached.get('candles', [])}
+
+    today_utc = int(time.time()) // 86400 * 86400
+    last_ts = max(candles) if candles else 0
+    if last_ts < today_utc:
+        pool = '' if force_fresh else (cached.get('pool', '') or '')
+        if not pool:
+            pool = _gecko_top_pool(mint)
+        if pool:
+            missing_days = ((today_utc - last_ts) // 86400 + 2) if last_ts else 1000
+            fresh = _gecko_daily_closes(pool, limit=min(1000, missing_days))
+            for ts, close in fresh:
+                candles[ts] = close
+            if fresh:
+                try:
+                    path.write_text(json.dumps({
+                        'pool': pool, 'updated_ts': int(time.time()),
+                        'candles': sorted(candles.items()),
+                    }))
+                except Exception:
+                    pass
+
+    cutoff = (earliest_ts or 0) - 7 * 86400
+    out = [[ts, c] for ts, c in sorted(candles.items()) if ts >= cutoff]
+    print(f'[price-history] {len(out)} daily candles for {mint[:8]}…')
+    return out
+
+
 def get_token_price_usd(mint):
     p = _price_from_jupiter(mint)
     if p > 0: return p
@@ -548,6 +634,67 @@ def _pick_quote(sol_delta, quote_deltas):
     return candidates[0]
 
 
+def _b58decode(s):
+    """Decode a base58 (Bitcoin alphabet) string to bytes."""
+    ALPHA = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+    n = 0
+    for c in s:
+        n = n * 58 + ALPHA.index(c)
+    body = n.to_bytes((n.bit_length() + 7) // 8, 'big') if n else b''
+    pad = len(s) - len(s.lstrip('1'))
+    return b'\x00' * pad + body
+
+
+# Anchor instruction discriminators = sha256("global:<name>")[:8]. Used to tell a
+# Meteora DLMM fee/reward *claim* apart from an add/remove-liquidity op so the log
+# can badge pure claims (free tokens received) explicitly.
+def _disc(name):
+    return _hashlib.sha256(('global:' + name).encode()).digest()[:8]
+
+_DLMM_CLAIM_DISCRIMINATORS = {
+    _disc(n) for n in ('claim_fee2', 'claim_fee', 'claim_reward2', 'claim_reward')
+}
+# Liquidity-changing instructions. If one co-occurs with a claim (e.g. close a
+# position and sweep fees in one tx), the net deltas are dominated by withdrawn
+# principal, NOT fee income — so such a tx must NOT be badged a pure claim.
+_DLMM_LIQUIDITY_DISCRIMINATORS = {
+    _disc(n) for n in (
+        'add_liquidity', 'add_liquidity2', 'add_liquidity_by_strategy',
+        'add_liquidity_by_strategy2', 'add_liquidity_by_strategy_one_side',
+        'add_liquidity_by_weight', 'add_liquidity_one_side',
+        'add_liquidity_one_side_precise', 'add_liquidity_one_side_precise2',
+        'remove_liquidity', 'remove_liquidity2', 'remove_liquidity_by_range',
+        'remove_liquidity_by_range2', 'remove_all_liquidity',
+        'close_position', 'close_position2', 'close_position_if_empty',
+    )
+}
+
+
+def _is_dlmm_claim(tx):
+    """True only if the tx claims fees/rewards AND does no liquidity add/remove/close.
+
+    A combined remove+claim tx is treated as a liquidity op, not a pure claim, so
+    its principal withdrawal isn't mislabeled as fee income in the log.
+    """
+    has_claim = has_liquidity = False
+    for ins in (tx.get('instructions') or []):
+        for c in [ins] + (ins.get('innerInstructions') or []):
+            if c.get('programId') != METEORA_DLMM:
+                continue
+            data = c.get('data') or ''
+            if not data:
+                continue
+            try:
+                disc = _b58decode(data)[:8]
+            except Exception:
+                continue
+            if disc in _DLMM_CLAIM_DISCRIMINATORS:
+                has_claim = True
+            elif disc in _DLMM_LIQUIDITY_DISCRIMINATORS:
+                has_liquidity = True
+    return has_claim and not has_liquidity
+
+
 def parse_tx(tx, target_mint, our_wallets, airdrop_programs):
     target_delta, sol_delta, quote_deltas = _compute_balance_deltas(tx, target_mint, our_wallets)
     top_ids, _ = _program_ids(tx)
@@ -600,8 +747,10 @@ def parse_tx(tx, target_mint, our_wallets, airdrop_programs):
 
     if is_lp:
         lp_label = LP_NAMES.get(lp_pid, 'LP')
+        is_claim = _is_dlmm_claim(tx)
         base['type']   = 'lp_op'
-        base['source'] = base['source'] + f' ({lp_label})'
+        base['lp_action'] = 'claim' if is_claim else 'lp'
+        base['source'] = base['source'] + f' ({lp_label}{" fee claim" if is_claim else ""})'
         base['sol_delta']  = sol_delta
         base['usdc_delta'] = quote_deltas.get(USDC_MINT, 0.0)
         base['usdt_delta'] = quote_deltas.get(USDT_MINT, 0.0)
@@ -1122,17 +1271,45 @@ def normalize_trade_prices(trades, display_quote, sol_price_usd):
     return trades
 
 
+def _dlmm_quote_value_usd(quote_tokens, quote_symbol, sol_price_usd):
+    """USD value of a DLMM position's quote leg. Handles USDC/USDT/SOL; 0 otherwise."""
+    if not quote_tokens or quote_tokens <= 0:
+        return 0.0
+    if quote_symbol in ('USDC', 'USDT'):
+        return quote_tokens
+    if quote_symbol == 'SOL':
+        return quote_tokens * sol_price_usd
+    return 0.0  # exotic quote token: not priced (best-effort)
+
+
 def build_position_breakdown(wallet_tokens, limit_orders, limit_err,
-                             dlmm_positions, dlmm_err, current_price_usd):
+                             dlmm_positions, dlmm_err, current_price_usd,
+                             sol_price_usd=0.0):
     """Build the position_breakdown object for the summary.
 
     All token counts are in human units. Value is computed at current market price.
     Each order/position in the returned structure carries a `value_usd` field for frontend convenience.
+
+    DLMM positions hold TWO legs: the target token (CARDS) and a quote token
+    (USDC/SOL). The quote leg accumulates as the pool sells CARDS when price moves
+    through the user's range. We value BOTH legs: `value_usd` per position is the
+    full liquidation value (CARDS-at-market + quote-at-market), and the dlmm bucket
+    exposes `quote_value_usd` so the summary can credit it as recovered proceeds.
     """
     limit_orders   = [{**o, 'value_usd': o['tokens_remaining'] * current_price_usd} for o in limit_orders]
-    dlmm_positions = [{**p, 'value_usd': p['tokens'] * current_price_usd}            for p in dlmm_positions]
+    dlmm_positions = [
+        {
+            **p,
+            'quote_value_usd': _dlmm_quote_value_usd(
+                p.get('quote_tokens', 0.0), p.get('quote_symbol'), sol_price_usd),
+            'value_usd': p['tokens'] * current_price_usd + _dlmm_quote_value_usd(
+                p.get('quote_tokens', 0.0), p.get('quote_symbol'), sol_price_usd),
+        }
+        for p in dlmm_positions
+    ]
     limit_tokens   = sum(o['tokens_remaining'] for o in limit_orders)
     dlmm_tokens    = sum(p['tokens'] for p in dlmm_positions)
+    dlmm_quote_usd = sum(p['quote_value_usd'] for p in dlmm_positions)
     total_tokens   = wallet_tokens + limit_tokens + dlmm_tokens
     pending_proceeds = sum(o['expected_proceeds_usdc'] for o in limit_orders)
     return {
@@ -1149,12 +1326,16 @@ def build_position_breakdown(wallet_tokens, limit_orders, limit_err,
         },
         'dlmm': {
             'tokens': dlmm_tokens,
-            'value_usd': dlmm_tokens * current_price_usd,
+            'value_usd': dlmm_tokens * current_price_usd + dlmm_quote_usd,
+            'quote_value_usd': dlmm_quote_usd,
             'positions': dlmm_positions,
             'error': dlmm_err,
         },
+        # USD value of the DLMM quote leg (recovered in-pool proceeds). Summary
+        # credits this toward net P/L and break-even recovery.
+        'lp_quote_value_usd': dlmm_quote_usd,
         'total_tokens':    total_tokens,
-        'total_value_usd': total_tokens * current_price_usd,
+        'total_value_usd': total_tokens * current_price_usd + dlmm_quote_usd,
     }
 
 
@@ -1232,10 +1413,17 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
         current_token_price = current_price_usd
     current_value = holdings * current_token_price
 
+    # DLMM quote leg (USDC/SOL the pool accumulated by selling CARDS through the
+    # user's range). This is recovered value the CARDS-only accounting can't see
+    # as a wallet sell, so credit it like realized proceeds. Normalized to the
+    # display quote. See build_position_breakdown for how it's computed.
+    lp_quote_value_usd = (position_breakdown or {}).get('lp_quote_value_usd', 0.0) or 0.0
+    lp_quote_value_q   = _normalize_to_quote(lp_quote_value_usd, 'USDC', display_quote, sol_price_usd)
+
     total_invested    = spread_cost
     realized_proceeds = total_sell_revenue
     holdings_value    = current_value
-    net_pnl           = realized_proceeds + holdings_value - total_invested
+    net_pnl           = realized_proceeds + holdings_value + lp_quote_value_q - total_invested
     net_pnl_pct       = (net_pnl / total_invested * 100) if total_invested > 0 else 0
     realized_pnl   = (total_sell_revenue - spread_avg * total_sold) if (total_sold > 0 and spread_avg > 0) else 0
     unrealized_pnl = ((current_token_price - spread_avg) * holdings) if (holdings > 0 and spread_avg > 0) else 0
@@ -1243,8 +1431,10 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
     usd_mult = 1.0 if display_quote in ('USD', 'USDC') else sol_price_usd
 
     # Break-even on remaining holdings: price the bag must reach for net P/L = 0.
-    # If realized proceeds already exceed total cost, you're past break-even (clamp to 0).
-    unrecovered_cost = max(0.0, spread_cost - total_sell_revenue)
+    # Recovered capital (realized sells + DLMM quote leg) reduces what the
+    # remaining CARDS still has to earn back. If recovery already exceeds cost,
+    # you're past break-even (clamp to 0).
+    unrecovered_cost = max(0.0, spread_cost - total_sell_revenue - lp_quote_value_q)
     break_even_price = (unrecovered_cost / holdings) if holdings > 0 else 0
     break_even_pct_above_current = (
         (break_even_price - current_token_price) / current_token_price * 100
@@ -1280,6 +1470,7 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
         'auto_funding_q': auto_funding_q, 'auto_funding_usd': auto_funding_usd,
         'total_invested': total_invested, 'realized_proceeds': realized_proceeds,
         'holdings_value': holdings_value, 'net_pnl': net_pnl, 'net_pnl_pct': net_pnl_pct,
+        'lp_quote_value_usd': lp_quote_value_usd, 'lp_quote_value_q': lp_quote_value_q,
         'cost_breakdown': breakdown,
         'num_buys': sum(1 for t in regular if t['type'] == 'buy'),
         'num_sells': sum(1 for t in regular if t['type'] == 'sell'),
@@ -1603,6 +1794,7 @@ def get_dlmm_positions(wallets, target_mint, target_decimals=None):
                     is_y = pair_info['token_y_mint'] == target_mint
                     if not is_x and not is_y:
                         continue  # this pool doesn't involve target_mint
+                    quote_mint = pair_info['token_y_mint'] if is_x else pair_info['token_x_mint']
 
                     # 3. Load BinArray accounts covering this position's bin range
                     lower = pos['lower_bin_id']
@@ -1627,8 +1819,13 @@ def get_dlmm_positions(wallets, target_mint, target_decimals=None):
                         if ba_index in ba_indices_needed:
                             bin_data.update(ba_bins)
 
-                    # 4. Compute user's share per bin
+                    # 4. Compute user's share per bin (both legs).
+                    # A DLMM bin holds amount_x + amount_y; the user's pro-rata
+                    # share of each is (amount * liq_share / liq_supply). We need
+                    # BOTH the target leg (CARDS) and the quote leg (USDC/SOL the
+                    # pool accumulated by selling CARDS through the range).
                     total_target_raw = 0
+                    total_quote_raw  = 0
                     for i, bin_id in enumerate(range(lower, upper + 1)):
                         if i >= len(liq_shares):
                             break
@@ -1641,13 +1838,25 @@ def get_dlmm_positions(wallets, target_mint, target_decimals=None):
                         amt_x_raw, amt_y_raw, liq_supply = bin_entry
                         if liq_supply == 0:
                             continue
-                        if is_x:
-                            total_target_raw += (amt_x_raw * user_share) // liq_supply
-                        else:
-                            total_target_raw += (amt_y_raw * user_share) // liq_supply
+                        target_amt = amt_x_raw if is_x else amt_y_raw
+                        quote_amt  = amt_y_raw if is_x else amt_x_raw
+                        total_target_raw += (target_amt * user_share) // liq_supply
+                        total_quote_raw  += (quote_amt  * user_share) // liq_supply
 
-                    tokens = total_target_raw / (10 ** target_decimals)
-                    if tokens <= 0:
+                    # Resolve quote-leg decimals/symbol for downstream USD valuation.
+                    if quote_mint in (USDC_MINT, USDT_MINT):
+                        quote_decimals = 6
+                        quote_symbol   = 'USDC' if quote_mint == USDC_MINT else 'USDT'
+                    elif quote_mint == SOL_MINT:
+                        quote_decimals = 9
+                        quote_symbol   = 'SOL'
+                    else:
+                        quote_decimals = get_token_decimals(quote_mint)
+                        quote_symbol   = quote_mint[:4] + '..'
+
+                    tokens       = total_target_raw / (10 ** target_decimals)
+                    quote_tokens = total_quote_raw  / (10 ** quote_decimals)
+                    if tokens <= 0 and quote_tokens <= 0:
                         continue  # empty position
 
                     positions.append({
@@ -1655,6 +1864,9 @@ def get_dlmm_positions(wallets, target_mint, target_decimals=None):
                         'position_pubkey':  pos_pubkey,
                         'pair_address':     pos['lb_pair'],
                         'tokens':           tokens,
+                        'quote_tokens':     quote_tokens,
+                        'quote_mint':       quote_mint,
+                        'quote_symbol':     quote_symbol,
                     })
 
                 except Exception as e:
@@ -1812,6 +2024,7 @@ def analyze():
             open_limit_orders, open_limit_err,
             dlmm_positions, dlmm_err,
             token_price_usd,
+            sol_price_usd,
         )
 
         # v3.12: pair limit-order setups with their fills via Reserve token accounts
