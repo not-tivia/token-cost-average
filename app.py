@@ -1,18 +1,14 @@
 """
-Solana Token Tracker — v3.12.
+Solana Token Tracker — v3.13.
 
-Changes from v3.11:
-- Limit-order pairing: each Jupiter Limit V1/V2 setup tx is now matched with
-  its fills (and any cancellation refunds) via the shared Reserve token
-  account. Each ORDER becomes one priced event with: USDC deposited, USDC
-  refunded, USDC actually spent, tokens received, and the resulting avg
-  fill price. Same logic mirrored for sell limit orders (CARDS Reserve).
-- surface_best_worst's keeper_buys/keeper_sells now populate from these
-  paired orders. Trade Insights "Keeper Buys (Best/Worst)" finally shows
-  the real per-order entry prices ($0.28, $0.26, $0.24, etc).
-- Limit-order ledger printed to console with full breakdown per order.
-
-Backend-only change, index.html unchanged.
+Changes from v3.12:
+- Market price history: /api/analyze now returns `price_history` — daily
+  [ts, close_usd] pairs for the target token from GeckoTerminal (deepest-
+  liquidity pool, no API key), cached in cache/price_history_<mint>.json.
+  Failures degrade to cached/empty data and never break the analysis.
+- index.html: trade chart draws the market price as a muted line behind the
+  buy/sell dots (USDC display mode only); the flat dashed "Current Price"
+  line is removed as redundant — the market line ends at the current price.
 """
 
 import os
@@ -2049,6 +2045,10 @@ def analyze():
         lp_breakdown = analyze_lp_activity(trades, sol_price_usd, token_price_usd)
         best_worst = surface_best_worst_events(trades, dca_aggregate, limit_buy_orders, limit_sell_orders, top_n=15)
 
+        # v3.13: daily market price history for the chart line (never fatal)
+        earliest_ts = min((t['timestamp'] for t in trades if t.get('timestamp')), default=0)
+        price_history = get_price_history_usd(target_mint, earliest_ts, force_fresh=force_fresh)
+
         return jsonify({
             'trades': trades,
             'summary': summary,
@@ -2057,6 +2057,7 @@ def analyze():
             'airdrop_events': [t for t in trades if t['type'] == 'airdrop'],
             'lp_breakdown':   lp_breakdown,
             'best_worst':     best_worst,
+            'price_history':  price_history,
             'limit_buy_orders':  limit_buy_orders,
             'limit_sell_orders': limit_sell_orders,
             'wallets_scanned': len(wallets),
@@ -2086,5 +2087,5 @@ def clear_cache():
 
 
 if __name__ == '__main__':
-    print('Solana Token Tracker (v3.12) — http://localhost:5000')
+    print('Solana Token Tracker (v3.13) — http://localhost:5000')
     app.run(debug=True, port=5000)
