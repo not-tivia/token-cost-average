@@ -1120,7 +1120,7 @@
 
             attachSortHandlers();
             renderTable();
-            renderChart(trades, summary);
+            renderChart(trades, summary, lastData.price_history || []);
             document.getElementById('projectionSection').style.display = 'block';
             setupProjectionListeners();
             recomputeProjection();
@@ -1401,7 +1401,7 @@
             URL.revokeObjectURL(url);
         }
 
-        function renderChart(trades, summary) {
+        function renderChart(trades, summary, priceHistory) {
             if (chart) chart.destroy();
             const q = summary.display_quote;
             const buys = trades.filter(t => t.type === 'buy' && t.price_per_token_q > 0).sort((a,b) => a.timestamp - b.timestamp);
@@ -1427,10 +1427,15 @@
 
             const allTs = [...buys, ...sells].map(t => t.timestamp);
             const earliest = allTs.length ? Math.min(...allTs) : Date.now()/1000 - 86400*30;
-            const currentPriceLine = summary.current_token_price > 0 ? [
-                { x: new Date(earliest * 1000), y: summary.current_token_price },
-                { x: new Date(), y: summary.current_token_price }
-            ] : [];
+            // Market price history (USD ~ USDC). Only drawn in USDC/USD display
+            // mode — no historical SOL conversion (see 2026-06-11 design spec).
+            const showMarket = (q === 'USDC' || q === 'USD') && priceHistory && priceHistory.length > 0;
+            const marketLine = showMarket
+                ? priceHistory.map(c => ({ x: new Date(c[0] * 1000), y: c[1] }))
+                : [];
+            if (showMarket && summary.current_token_price > 0) {
+                marketLine.push({ x: new Date(), y: summary.current_token_price });
+            }
             const breakEvenLine = summary.break_even_price > 0 ? [
                 { x: new Date(earliest * 1000), y: summary.break_even_price },
                 { x: new Date(), y: summary.break_even_price }
@@ -1465,9 +1470,10 @@
                         { label: 'Running Avg (swap buys only)', type: 'line', data: runningAvg,
                             borderColor: 'rgba(108, 99, 255, 0.85)', backgroundColor: 'rgba(108, 99, 255, 0.06)',
                             borderWidth: 2, pointRadius: 0, pointHoverRadius: 0, stepped: 'before', fill: true, order: 2 },
-                        { label: 'Current Price', type: 'line', data: currentPriceLine,
-                            borderColor: 'rgba(255, 215, 0, 0.5)', borderWidth: 1.5, borderDash: [4, 4],
-                            pointRadius: 0, pointHoverRadius: 0, fill: false, order: 3 },
+                        { label: 'Market Price', type: 'line', data: marketLine,
+                            borderColor: 'rgba(120, 144, 176, 0.55)', backgroundColor: 'rgba(120, 144, 176, 0.05)',
+                            borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 0,
+                            fill: true, tension: 0.2, order: 4 },
                         { label: 'Break-even', type: 'line', data: breakEvenLine,
                             borderColor: 'rgba(255, 152, 0, 0.6)', borderWidth: 1.5, borderDash: [8, 4],
                             pointRadius: 0, pointHoverRadius: 0, fill: false, order: 3 },
