@@ -372,10 +372,15 @@ def get_price_history_usd(mint, earliest_ts, force_fresh=False):
     cached = {'pool': '', 'updated_ts': 0, 'candles': []}
     if path.exists() and not force_fresh:
         try:
-            cached = json.loads(path.read_text())
+            loaded = json.loads(path.read_text())
+            if isinstance(loaded, dict):
+                cached = loaded
         except Exception:
             pass
-    candles = {int(c[0]): float(c[1]) for c in cached.get('candles', [])}
+    try:
+        candles = {int(c[0]): float(c[1]) for c in cached.get('candles', [])}
+    except Exception:
+        candles = {}
 
     today_utc = int(time.time()) // 86400 * 86400
     last_ts = max(candles) if candles else 0

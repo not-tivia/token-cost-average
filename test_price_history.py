@@ -85,6 +85,12 @@ assert fallback == [[TODAY - 5 * DAY, 0.2], [TODAY - 4 * DAY, 0.21]], fallback
 empty = get_price_history_usd(MINT2, earliest_ts=0)
 assert empty == [], empty
 
+# 5b. Corrupted cache shapes -> degrade gracefully, never raise
+for bad in ('null', '[]', '"junk"', '{"pool": "POOL_BIG", "candles": [[42], ["abc", "x"]]}'):
+    _pricehist_cache_path(MINT2).write_text(bad)
+    got = get_price_history_usd(MINT2, earliest_ts=0)
+    assert got == [], (bad, got)
+
 # 6. force_fresh rediscovers the pool and refetches
 app.requests.get = fake_get
 fresh = get_price_history_usd(MINT, earliest_ts=0, force_fresh=True)
