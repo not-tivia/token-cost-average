@@ -79,6 +79,18 @@ New fetcher `get_price_history_usd(mint, earliest_ts)`:
   daily chart for the same pool; confirm dots sit on the curve, SOL mode hides
   the line, and a cold run with GeckoTerminal unreachable still analyzes.
 
+## Addendum (2026-06-11, post-ship): DefiLlama backfill
+
+GeckoTerminal's public API turned out to serve only the last **180 days** of
+OHLCV (HTTP 401 beyond that), leaving trades older than ~6 months without a
+market line. Fix: when the earliest candle is newer than the cutoff and the
+cache isn't flagged `backfilled`, fetch older daily closes once from
+DefiLlama (`coins.llama.fi/chart/solana:<mint>`, token-level, keyless,
+**max 500 points per request** — window anchored to end at the first
+GeckoTerminal candle). GeckoTerminal wins on overlapping days. The
+`backfilled` flag in the cache prevents repeat DefiLlama calls; a failed
+backfill leaves the flag unset so it retries on the next stale day.
+
 ## Out of scope
 
 - Hourly/intraday candles (free APIs only keep recent months).

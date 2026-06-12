@@ -5,6 +5,8 @@ Changes from v3.12:
 - Market price history: /api/analyze now returns `price_history` — daily
   [ts, close_usd] pairs for the target token from GeckoTerminal (deepest-
   liquidity pool, no API key), cached in cache/price_history_<mint>.json.
+  GeckoTerminal's public API only serves ~180 days, so older days are
+  backfilled once from DefiLlama (token-level, keyless, 500-point cap).
   Failures degrade to cached/empty data and never break the analysis.
 - index.html: trade chart draws the market price as a muted line behind the
   buy/sell dots (USDC display mode only); the flat dashed "Current Price"
@@ -356,13 +358,40 @@ def _gecko_daily_closes(pool, limit=1000):
         return []
 
 
+def _llama_daily_closes(mint, start_ts, end_ts):
+    """Older daily [ts, close_usd] pairs from DefiLlama (token-level, keyless).
+
+    Backfill source for days beyond GeckoTerminal's 180-day public-API window.
+    DefiLlama rejects requests above 500 data points, so the span is clamped.
+    Timestamps are normalized to UTC day buckets. [] on any failure.
+    """
+    try:
+        days = max(1, min(500, (end_ts - start_ts) // 86400 + 2))
+        resp = requests.get(
+            f'https://coins.llama.fi/chart/solana:{mint}',
+            params={'start': start_ts, 'span': days, 'period': '1d'}, timeout=15,
+        )
+        if resp.status_code != 200: return []
+        prices = (resp.json().get('coins', {})
+                  .get(f'solana:{mint}', {}).get('prices', [])) or []
+        out = {}
+        for p in prices:
+            ts = int(p['timestamp']) // 86400 * 86400
+            out[ts] = float(p['price'])
+        return sorted(out.items())
+    except Exception:
+        return []
+
+
 def get_price_history_usd(mint, earliest_ts, force_fresh=False):
     """Daily [ts, close_usd] pairs from ~7 days before earliest_ts to now.
 
     Cached in cache/price_history_<mint>.json. If the cache already holds
-    today's (UTC) candle, no network call is made. On any failure the cached
-    candles (or []) are returned — this function must never raise, so price
-    problems can't break the P/L analysis.
+    today's (UTC) candle, no network call is made. GeckoTerminal's public API
+    only serves the last ~180 days of OHLCV, so older days are backfilled once
+    from DefiLlama (GeckoTerminal wins on overlapping days). On any failure
+    the cached candles (or []) are returned — this function must never raise,
+    so price problems can't break the P/L analysis.
     """
     path = _pricehist_cache_path(mint)
     cached = {'pool': '', 'updated_ts': 0, 'candles': []}
@@ -378,6 +407,7 @@ def get_price_history_usd(mint, earliest_ts, force_fresh=False):
     except Exception:
         candles = {}
 
+    cutoff = (earliest_ts or 0) - 7 * 86400
     today_utc = int(time.time()) // 86400 * 86400
     last_ts = max(candles) if candles else 0
     if last_ts < today_utc:
@@ -389,16 +419,28 @@ def get_price_history_usd(mint, earliest_ts, force_fresh=False):
             fresh = _gecko_daily_closes(pool, limit=min(1000, missing_days))
             for ts, close in fresh:
                 candles[ts] = close
-            if fresh:
-                try:
-                    path.write_text(json.dumps({
-                        'pool': pool, 'updated_ts': int(time.time()),
-                        'candles': sorted(candles.items()),
-                    }))
-                except Exception:
-                    pass
+        backfill_done = bool(cached.get('backfilled')) and not force_fresh
+        if not backfill_done:
+            first_ts = min(candles) if candles else today_utc
+            if first_ts > cutoff:
+                # anchor the 500-point window to end at the first GT candle
+                start = max(cutoff, first_ts - 498 * 86400, 0)
+                older = _llama_daily_closes(mint, start, first_ts)
+                for ts, close in older:
+                    if ts < first_ts:
+                        candles[ts] = close
+                backfill_done = bool(older)
+            else:
+                backfill_done = True
+        try:
+            path.write_text(json.dumps({
+                'pool': pool, 'updated_ts': int(time.time()),
+                'backfilled': backfill_done,
+                'candles': sorted(candles.items()),
+            }))
+        except Exception:
+            pass
 
-    cutoff = (earliest_ts or 0) - 7 * 86400
     out = [[ts, c] for ts, c in sorted(candles.items()) if ts >= cutoff]
     print(f'[price-history] {len(out)} daily candles for {mint[:8]}…')
     return out
