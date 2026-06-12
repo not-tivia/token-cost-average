@@ -384,7 +384,8 @@
             </div>
 
             <div class="section">
-                <h2>Trade History <span style="font-weight:400; font-size:12px; color:#888;">(click point to highlight in table)</span></h2>
+                <h2>Trade History <span style="font-weight:400; font-size:12px; color:#888;">(click point to highlight in table &middot; scroll to zoom, drag to pan, double-click to reset)</span>
+                    <button class="filter-btn" style="float:right;" onclick="if (chart) chart.resetZoom()">Reset zoom</button></h2>
                 <div class="chart-container"><canvas id="tradeChart"></canvas></div>
             </div>
 
@@ -526,6 +527,8 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
     <script>
         let chart = null;
         let selectedQuote = 'USDC';
@@ -1499,6 +1502,11 @@
                             border: { display: false } },
                     },
                     plugins: {
+                        zoom: {
+                            zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' },
+                            pan: { enabled: true, mode: 'x' },
+                            limits: { x: { min: 'original', max: 'original' } },
+                        },
                         legend: { position: 'top', align: 'end',
                             labels: { color: '#aaa', font: { size: 11 }, usePointStyle: true, padding: 14, boxWidth: 8 } },
                         tooltip: { backgroundColor: 'rgba(18, 18, 26, 0.97)', titleColor: '#fff', bodyColor: '#ccc',
@@ -1520,6 +1528,7 @@
                     },
                 },
             });
+            document.getElementById('tradeChart').ondblclick = () => chart && chart.resetZoom();
         }
 
         function scrollToRow(signature) {
