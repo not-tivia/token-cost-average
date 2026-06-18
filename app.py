@@ -1782,6 +1782,55 @@ def _find_bin_array_accounts(lb_pair_key):
     return _get_program_accounts_pubkeys(METEORA_DLMM, filters)
 
 
+_CARDS_LB_PAIR_CACHE = {}  # address -> bool (is a target-mint LbPair)
+
+def _dlmm_ix_accounts(tx):
+    """Account list of the tx's top-level Meteora DLMM instruction, or []."""
+    for ins in tx.get('instructions', []) or []:
+        if ins.get('programId') == METEORA_DLMM:
+            return ins.get('accounts', []) or []
+    return []
+
+# accounts that are never an LbPair; skip to save RPC calls
+_DLMM_NON_PAIR = {
+    METEORA_DLMM, '11111111111111111111111111111111',
+    'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+    'ComputeBudget111111111111111111111111111111',
+    'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',
+}
+
+def identify_cards_lb_pairs(transactions, target_mint):
+    """Set of LbPair addresses (involving target_mint) referenced by DLMM txs.
+
+    Decodes each candidate instruction account once via _decode_lb_pair and
+    caches the verdict so repeated scans don't re-fetch. Accounts that fail to
+    decode as an LbPair are cached as False.
+    """
+    candidates = set()
+    for tx in transactions:
+        if _is_dlmm_claim(tx):
+            continue
+        for acct in _dlmm_ix_accounts(tx):
+            if acct and acct not in _DLMM_NON_PAIR and len(acct) >= 32:
+                candidates.add(acct)
+    pairs = set()
+    for acct in candidates:
+        cached = _CARDS_LB_PAIR_CACHE.get(acct)
+        if cached is None:
+            cached = False
+            try:
+                raw = _get_account_data(acct)
+                info = _decode_lb_pair(raw) if raw else None
+                if info and target_mint in (info.get('token_x_mint'), info.get('token_y_mint')):
+                    cached = True
+            except Exception:
+                cached = False
+            _CARDS_LB_PAIR_CACHE[acct] = cached
+        if cached:
+            pairs.add(acct)
+    return pairs
+
+
 def get_dlmm_positions(wallets, target_mint, target_decimals=None):
     """Fetch Meteora DLMM PositionV2 positions across wallets holding target_mint.
 
