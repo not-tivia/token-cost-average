@@ -1831,6 +1831,57 @@ def identify_cards_lb_pairs(transactions, target_mint):
     return pairs
 
 
+def compute_dlmm_conversions(transactions, target_mint, wallets, sol_price_usd,
+                             open_positions=None, token_price_usd=0.0):
+    """Per-LbPair net CARDS/quote conversion ledger from tx history.
+
+    A pool whose net CARDS delta is negative sold the user's CARDS for quote
+    (USDC/USDT/SOL); that quote is realized proceeds. A pool whose net CARDS
+    delta is positive bought CARDS for the user; the quote spent is added cost.
+    Fee-claim txs are excluded. Open positions fold in as a virtual withdrawal
+    at current value so an open position's parked quote still counts (this
+    replaces the old live-snapshot lp_quote_value).
+    """
+    EPS = 1.0
+    wset = set(wallets)
+    pairs = identify_cards_lb_pairs(transactions, target_mint)
+    agg = {}  # pair -> [net_cards, net_quote_usd]
+    for tx in transactions:
+        if _is_dlmm_claim(tx):
+            continue
+        accts = _dlmm_ix_accounts(tx)
+        if not accts:
+            continue
+        pair = next((a for a in accts if a in pairs), None)
+        if pair is None:
+            continue
+        td, sd, qd = _compute_balance_deltas(tx, target_mint, wset)
+        q_usd = qd.get(USDC_MINT, 0.0) + qd.get(USDT_MINT, 0.0) + sd * sol_price_usd
+        slot = agg.setdefault(pair, [0.0, 0.0])
+        slot[0] += td
+        slot[1] += q_usd
+    for p in (open_positions or []):
+        pair = p.get('pair_address')
+        if not pair:
+            continue
+        slot = agg.setdefault(pair, [0.0, 0.0])
+        slot[0] += p.get('tokens', 0.0)  # virtual CARDS withdrawal
+        slot[1] += _dlmm_quote_value_usd(p.get('quote_tokens', 0.0),
+                                         p.get('quote_symbol'), sol_price_usd)
+    realized = cost = 0.0
+    pools = []
+    for pair, (net_cards, net_quote) in agg.items():
+        if net_cards < -EPS:
+            kind = 'sell'; realized += max(0.0, net_quote)
+        elif net_cards > EPS:
+            kind = 'buy'; cost += max(0.0, -net_quote)
+        else:
+            kind = 'flat'
+        pools.append({'pair': pair, 'net_cards': net_cards,
+                      'net_quote_usd': net_quote, 'kind': kind})
+    return {'realized_proceeds_usd': realized, 'conversion_cost_usd': cost, 'pools': pools}
+
+
 def get_dlmm_positions(wallets, target_mint, target_decimals=None):
     """Fetch Meteora DLMM PositionV2 positions across wallets holding target_mint.
 
