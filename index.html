@@ -705,6 +705,12 @@
                     Realized: <span class="${realized >= 0 ? 'pos' : 'neg'}">${realized >= 0 ? '+' : ''}${fmtUsd(realized)}</span>
                     · Unrealized: <span class="${unrealized >= 0 ? 'pos' : 'neg'}">${unrealized >= 0 ? '+' : ''}${fmtUsd(unrealized)}</span>
                 </div>` : '';
+            const dlmmProceeds = summary.dlmm_realized_proceeds_usd || 0;
+            const dlmmCost = summary.dlmm_conversion_cost_usd || 0;
+            const dlmmLines = dlmmProceeds > 0.01 ? `
+                <div class="split">Recovered from DLMM (sold CARDS): <span class="pos">+${fmtUsd(dlmmProceeds)}</span></div>` : '';
+            const dlmmCostLine = dlmmCost > 0.01 ? `
+                <div class="split">Bought via DLMM: <span class="neg">${fmtUsd(dlmmCost)}</span></div>` : '';
             el.style.display = 'grid';
             el.innerHTML = `
                 <div class="pnl-cell"><div class="label">Total Invested</div>
@@ -712,7 +718,8 @@
                     <div class="sub">${fmtUsd(summary.total_invested_usd)} cash in</div></div>
                 <div class="pnl-cell pnl-divider"><div class="label">Realized From Sells</div>
                     <div class="value">${fmt(summary.realized_proceeds, 2)} ${q}</div>
-                    <div class="sub">${fmtUsd(summary.realized_proceeds_usd)} cash out</div></div>
+                    <div class="sub">${fmtUsd(summary.realized_proceeds_usd)} cash out</div>
+                    ${dlmmLines}${dlmmCostLine}</div>
                 <div class="pnl-cell pnl-divider"><div class="label">Holdings Value</div>
                     <div class="value">${fmt(summary.holdings_value, 2)} ${q}</div>
                     <div class="sub">${fmt(summary.holdings, 2)} tokens @ ${fmt(summary.current_token_price, 6)}</div></div>
