@@ -1386,7 +1386,7 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
                       current_price_usd, sol_price_usd,
                       auto_funding_usd, display_quote='USDC',
                       manual_dca_cost=0.0, manual_airdrop_tokens=0.0,
-                      position_breakdown=None):
+                      position_breakdown=None, dlmm_conversions=None):
     regular  = [t for t in trades if t['type'] in ('buy', 'sell', 'unpriced_in', 'transfer_out')]
     dca_txs  = [t for t in trades if t['type'] == 'dca_tx']
     lp_ops   = [t for t in trades if t['type'] == 'lp_op']
@@ -1456,11 +1456,15 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
         current_token_price = current_price_usd
     current_value = holdings * current_token_price
 
-    # DLMM quote leg (USDC/SOL the pool accumulated by selling CARDS through the
-    # user's range). This is recovered value the CARDS-only accounting can't see
-    # as a wallet sell, so credit it like realized proceeds. Normalized to the
-    # display quote. See build_position_breakdown for how it's computed.
-    lp_quote_value_usd = (position_breakdown or {}).get('lp_quote_value_usd', 0.0) or 0.0
+    # Recovered proceeds from CARDS the DLMM pool sold. Prefer the persistent
+    # per-pool conversion ledger (survives withdrawal); fall back to the live
+    # open-position snapshot only when conversions weren't supplied.
+    if dlmm_conversions is not None:
+        lp_quote_value_usd = dlmm_conversions.get('realized_proceeds_usd', 0.0) or 0.0
+        dlmm_conversion_cost_usd = dlmm_conversions.get('conversion_cost_usd', 0.0) or 0.0
+    else:
+        lp_quote_value_usd = (position_breakdown or {}).get('lp_quote_value_usd', 0.0) or 0.0
+        dlmm_conversion_cost_usd = 0.0
     lp_quote_value_q   = _normalize_to_quote(lp_quote_value_usd, 'USDC', display_quote, sol_price_usd)
 
     total_invested    = spread_cost
@@ -1547,6 +1551,8 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
         'total_pnl_usd': total_pnl * usd_mult, 'net_pnl_usd': net_pnl * usd_mult,
         'total_invested_usd': total_invested * usd_mult,
         'realized_proceeds_usd': realized_proceeds * usd_mult,
+        'dlmm_realized_proceeds_usd': lp_quote_value_usd,
+        'dlmm_conversion_cost_usd': dlmm_conversion_cost_usd,
     }
 
 
@@ -2175,6 +2181,11 @@ def analyze():
             unique, target_mint, wallet_set, sol_price_usd
         )
 
+        dlmm_conversions = compute_dlmm_conversions(
+            unique, target_mint, wallets, sol_price_usd,
+            open_positions=dlmm_positions, token_price_usd=token_price_usd,
+        )
+
         trades = normalize_trade_prices(trades, display_quote, sol_price_usd)
         summary = calculate_summary(
             trades, dca_aggregate, on_chain,
@@ -2182,6 +2193,7 @@ def analyze():
             auto_funding_usd, display_quote,
             manual_dca_cost, manual_airdrop_tokens,
             position_breakdown=position_breakdown,
+            dlmm_conversions=dlmm_conversions,
         )
 
         lp_breakdown = analyze_lp_activity(trades, sol_price_usd, token_price_usd)

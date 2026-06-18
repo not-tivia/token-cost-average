@@ -43,6 +43,39 @@ def test_conversions_sell_pool_credits_quote(monkeypatch):
     assert kinds == {'PAIRSELL': 'sell', 'PAIRBUY': 'buy'}
 
 
+def test_summary_uses_realized_proceeds_for_break_even():
+    # holdings=500k, spread_cost=115855, no wallet sells, realized DLMM=29277
+    conv = {'realized_proceeds_usd': 29277.0, 'conversion_cost_usd': 0.0, 'pools': []}
+    trades = [{
+        'type': 'buy', 'token_amount': 500000.0, 'token_delta': 500000.0,
+        'quote_amount': 115855.0, 'quote_symbol': 'USDC', 'price_per_token': 0.231,
+        'timestamp': 1, 'normalized_quote_amount': 115855.0,
+    }]
+    dca_aggregate = {
+        'order_count': 0, 'orders': [], 'source': 'none',
+        'buy_target_tokens': 0.0, 'buy_cost_usd': 0.0,
+        'sell_target_tokens': 0.0, 'sell_revenue_usd': 0.0,
+        'gross_usdc_out': 0.0, 'gross_usdc_in': 0.0, 'errors': [],
+    }
+    s = app.calculate_summary(
+        trades=trades,
+        dca_aggregate=dca_aggregate,
+        on_chain_balance=500000.0,
+        current_price_usd=0.20,
+        sol_price_usd=70.0,
+        auto_funding_usd=0.0,
+        display_quote='USDC',
+        manual_dca_cost=0.0,
+        manual_airdrop_tokens=0.0,
+        position_breakdown=None,
+        dlmm_conversions=conv,
+    )
+    assert abs(s['break_even_price'] - 0.1731) < 0.005, \
+        f"break_even_price should be ~0.173, got {s['break_even_price']:.4f}"
+    assert round(s['dlmm_realized_proceeds_usd']) == 29277, \
+        f"dlmm_realized_proceeds_usd should be 29277, got {s['dlmm_realized_proceeds_usd']}"
+
+
 if __name__ == '__main__':
     test_dlmm_ix_accounts_extracts_meteora_accounts()
     test_dlmm_ix_accounts_none_when_no_dlmm()
@@ -54,3 +87,6 @@ if __name__ == '__main__':
     finally:
         mp.undo()
     print('Task 2 unit tests passed')
+
+    test_summary_uses_realized_proceeds_for_break_even()
+    print('Task 3 unit tests passed')
