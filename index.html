@@ -705,21 +705,27 @@
                     Realized: <span class="${realized >= 0 ? 'pos' : 'neg'}">${realized >= 0 ? '+' : ''}${fmtUsd(realized)}</span>
                     · Unrealized: <span class="${unrealized >= 0 ? 'pos' : 'neg'}">${unrealized >= 0 ? '+' : ''}${fmtUsd(unrealized)}</span>
                 </div>` : '';
+            const sym = (lastData && lastData.token_symbol) || 'TOKEN';
             const dlmmProceeds = summary.dlmm_realized_proceeds_usd || 0;
+            const dlmmFees = summary.dlmm_fee_income_usd || 0;
             const dlmmCost = summary.dlmm_conversion_cost_usd || 0;
-            const dlmmLines = dlmmProceeds > 0.01 ? `
-                <div class="split">Recovered from DLMM (sold CARDS): <span class="pos">+${fmtUsd(dlmmProceeds)}</span></div>` : '';
+            const dlmmTokens = summary.dlmm_conversion_tokens || 0;
+            const dlmmLines = (dlmmProceeds > 0.01 ? `
+                <div class="split">Recovered from DLMM (pool sold ${sym}): <span class="pos">+${fmtUsd(dlmmProceeds)}</span></div>` : '')
+                + (dlmmFees > 0.01 ? `
+                <div class="split">DLMM fees claimed (USDC/SOL): <span class="pos">+${fmtUsd(dlmmFees)}</span></div>` : '');
             const dlmmCostLine = dlmmCost > 0.01 ? `
-                <div class="split">Bought via DLMM: <span class="neg">${fmtUsd(dlmmCost)}</span></div>` : '';
+                <div class="split">incl. ${fmtUsd(dlmmCost)} bought via DLMM (${fmt(dlmmTokens, 0)} ${sym})</div>` : '';
             el.style.display = 'grid';
             el.innerHTML = `
                 <div class="pnl-cell"><div class="label">Total Invested</div>
                     <div class="value">${fmt(summary.total_invested, 2)} ${q}</div>
-                    <div class="sub">${fmtUsd(summary.total_invested_usd)} cash in</div></div>
+                    <div class="sub">${fmtUsd(summary.total_invested_usd)} cash in</div>
+                    ${dlmmCostLine}</div>
                 <div class="pnl-cell pnl-divider"><div class="label">Realized From Sells</div>
                     <div class="value">${fmt(summary.realized_proceeds, 2)} ${q}</div>
                     <div class="sub">${fmtUsd(summary.realized_proceeds_usd)} cash out</div>
-                    ${dlmmLines}${dlmmCostLine}</div>
+                    ${dlmmLines}</div>
                 <div class="pnl-cell pnl-divider"><div class="label">Holdings Value</div>
                     <div class="value">${fmt(summary.holdings_value, 2)} ${q}</div>
                     <div class="sub">${fmt(summary.holdings, 2)} tokens @ ${fmt(summary.current_token_price, 6)}</div></div>
@@ -740,7 +746,8 @@
                 { name: 'Regular market buys', data: b.reg_buys, color: '#4caf50' },
                 { name: 'Keeper-net (DCA / Limit / Recurring)', data: b.keeper, color: '#ba68c8' },
                 { name: `Funding-attributed (${b.funding.source})`, data: b.funding, color: '#ff9800' },
-            ].filter(c => c.data.cost > 0);
+                { name: 'Bought via DLMM pool (pool converted quote to tokens)', data: b.dlmm_buys, color: '#26c6da' },
+            ].filter(c => c.data && c.data.cost > 0);
             if (channels.length === 0) { el.style.display = 'none'; return; }
             el.style.display = 'block';
             el.innerHTML = `
@@ -944,13 +951,46 @@
                         <div class="lp-flow-row net"><span class="k">Net</span><span class="v ${lp.sol_net > 0 ? 'positive' : lp.sol_net < 0 ? 'negative' : ''}">${lp.sol_net > 0 ? '+' : ''}${fmt(lp.sol_net, 4)}</span></div>
                     </div>
                 </div>
+                ${dlmmLedgerHtml(summary, symbol)}
+            `;
+        }
+
+        // Meteora DLMM ledger: what the pools did for us, from tx history.
+        //   "in positions"  = what's parked right now (also counted in Holdings Value / In DLMM Position)
+        //   "fees claimed"  = free tokens (already in wallet) + cash paid out
+        //   "pool sold"     = quote received while a pool net-sold our tokens (incl. quote still parked)
+        //   "bought via"    = quote a pool spent net-buying tokens for us (in cost basis)
+        function dlmmLedgerHtml(s, symbol) {
+            const pb = s.position_breakdown || {};
+            const d = pb.dlmm || {};
+            const inTok = d.tokens || 0, inQuote = d.quote_value_usd || 0, inVal = d.value_usd || 0;
+            const feeTok = s.dlmm_fee_tokens || 0, feeUsd = s.dlmm_fee_income_usd || 0;
+            const sold = s.dlmm_realized_proceeds_usd || 0;
+            const costUsd = s.dlmm_conversion_cost_usd || 0, costTok = s.dlmm_conversion_tokens || 0;
+            const netCash = sold + feeUsd - costUsd;
+            const pools = (s.dlmm_pools || []).map(p => {
+                const kind = p.kind === 'sell' ? `sold ${fmt(-p.net_cards, 0)} ${symbol}` :
+                             p.kind === 'buy'  ? `bought ${fmt(p.net_cards, 0)} ${symbol}` : 'flat';
+                const q = p.net_quote_usd || 0;
+                return `<div class="lp-pnl-row"><span class="lab">pool ${(p.pair || '?').slice(0, 8)}... - ${kind}</span>
+                    <span class="val">${q >= 0 ? '+' : '-'}${fmtUsd(Math.abs(q))} quote · fees ${fmt(p.fees_target || 0, 0)} ${symbol} + ${fmtUsd(p.fees_quote_usd || 0)}</span></div>`;
+            }).join('');
+            return `
                 <div class="lp-pnl">
-                    <div class="lp-pnl-row"><span class="lab">Deposit value (at current prices)</span><span class="val">${fmtUsd(lp.deposit_value_usd)}</span></div>
-                    <div class="lp-pnl-row"><span class="lab">Withdraw value (at current prices)</span><span class="val">${fmtUsd(lp.withdraw_value_usd)}</span></div>
-                    <div class="lp-pnl-row big"><span class="lab">LP P/L (heuristic, fees + IL combined)</span><span class="val ${pnlClassStr}">${lp.lp_pnl_usd > 0 ? '+' : ''}${fmtUsd(lp.lp_pnl_usd)}</span></div>
+                    <div class="lp-pnl-row"><span class="lab">Currently in open positions</span>
+                        <span class="val">${fmt(inTok, 0)} ${symbol} + ${fmtUsd(inQuote)} quote = ${fmtUsd(inVal)}</span></div>
+                    <div class="lp-pnl-row"><span class="lab">Fees claimed (all time, both legs)</span>
+                        <span class="val">${fmt(feeTok, 0)} ${symbol} (in wallet) + <span class="positive">${fmtUsd(feeUsd)}</span> cash</span></div>
+                    <div class="lp-pnl-row"><span class="lab">Cash from pools selling our ${symbol}</span>
+                        <span class="val positive">+${fmtUsd(sold)}${inQuote > 0.01 ? ` <span style="color:#888">(incl. ${fmtUsd(inQuote)} USDC still sitting in open positions)</span>` : ''}</span></div>
+                    ${costUsd > 0.01 ? `<div class="lp-pnl-row"><span class="lab">Spent by pools buying ${symbol} for us</span>
+                        <span class="val negative">-${fmtUsd(costUsd)} for ${fmt(costTok, 0)} ${symbol} (in cost basis)</span></div>` : ''}
+                    <div class="lp-pnl-row big"><span class="lab">Net cash out of DLMM pools</span>
+                        <span class="val ${netCash > 0 ? 'positive' : netCash < 0 ? 'negative' : ''}">${netCash > 0 ? '+' : ''}${fmtUsd(netCash)}</span></div>
+                    ${pools}
                 </div>
                 <div class="lp-disclaimer">
-                    Heuristic. Compares all-time deposit value vs withdrawal value at <b>current</b> prices. Doesn't separate fees from impermanent loss.
+                    Cash figures are USDC/USDT plus SOL at today's price. ${symbol} that came back out of pools (principal or fees) is not "cash": it sits in Holdings Value at the current price. All of the above is already inside Net P/L and break-even.
                 </div>
             `;
         }

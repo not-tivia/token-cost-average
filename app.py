@@ -1423,11 +1423,33 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
     else: extra_cost = auto_funding_q; cost_source = 'auto-detected'
     extra_tokens_priced = priceable_unpriced if (extra_cost > 0 and priceable_unpriced > 0) else 0.0
 
-    spread_tokens = total_bought_reg + dca_buy_tokens + extra_tokens_priced
-    spread_cost   = total_buy_cost_reg + dca_buy_cost_q + extra_cost
+    # Meteora DLMM conversion ledger (compute_dlmm_conversions):
+    #   realized_proceeds  - quote a pool paid out while net-selling our CARDS
+    #   conversion_cost    - quote a pool consumed while net-buying CARDS for us
+    #                        (a purchase channel: joins cost basis + tokens bought)
+    #   fee_income         - USDC/USDT/SOL fees claimed from CARDS pools (cash out)
+    # Fallback when no ledger: the live open-position quote snapshot.
+    if dlmm_conversions is not None:
+        lp_quote_value_usd       = dlmm_conversions.get('realized_proceeds_usd', 0.0) or 0.0
+        dlmm_conversion_cost_usd = dlmm_conversions.get('conversion_cost_usd', 0.0) or 0.0
+        dlmm_conversion_tokens   = dlmm_conversions.get('conversion_tokens', 0.0) or 0.0
+        dlmm_fee_income_usd      = dlmm_conversions.get('fee_income_usd', 0.0) or 0.0
+        dlmm_fee_tokens          = dlmm_conversions.get('fee_target_tokens', 0.0) or 0.0
+        dlmm_pools               = dlmm_conversions.get('pools', []) or []
+    else:
+        lp_quote_value_usd = (position_breakdown or {}).get('lp_quote_value_usd', 0.0) or 0.0
+        dlmm_conversion_cost_usd = dlmm_conversion_tokens = dlmm_fee_income_usd = dlmm_fee_tokens = 0.0
+        dlmm_pools = []
+    lp_quote_value_q  = _normalize_to_quote(lp_quote_value_usd, 'USDC', display_quote, sol_price_usd)
+    dlmm_cost_q       = _normalize_to_quote(dlmm_conversion_cost_usd, 'USDC', display_quote, sol_price_usd)
+    dlmm_fee_income_q = _normalize_to_quote(dlmm_fee_income_usd, 'USDC', display_quote, sol_price_usd)
+    dlmm_recovered_q  = lp_quote_value_q + dlmm_fee_income_q
+
+    spread_tokens = total_bought_reg + dca_buy_tokens + extra_tokens_priced + dlmm_conversion_tokens
+    spread_cost   = total_buy_cost_reg + dca_buy_cost_q + extra_cost + dlmm_cost_q
     spread_avg    = (spread_cost / spread_tokens) if spread_tokens > 0 else 0
-    strict_tokens = total_bought_reg + dca_buy_tokens
-    strict_cost   = total_buy_cost_reg + dca_buy_cost_q
+    strict_tokens = total_bought_reg + dca_buy_tokens + dlmm_conversion_tokens
+    strict_cost   = total_buy_cost_reg + dca_buy_cost_q + dlmm_cost_q
     strict_avg    = (strict_cost / strict_tokens) if strict_tokens > 0 else 0
     total_sold = total_sold_reg + dca_sell_tokens
     total_sell_revenue = total_sell_revenue_reg + dca_sell_rev_q
@@ -1456,21 +1478,10 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
         current_token_price = current_price_usd
     current_value = holdings * current_token_price
 
-    # Recovered proceeds from CARDS the DLMM pool sold. Prefer the persistent
-    # per-pool conversion ledger (survives withdrawal); fall back to the live
-    # open-position snapshot only when conversions weren't supplied.
-    if dlmm_conversions is not None:
-        lp_quote_value_usd = dlmm_conversions.get('realized_proceeds_usd', 0.0) or 0.0
-        dlmm_conversion_cost_usd = dlmm_conversions.get('conversion_cost_usd', 0.0) or 0.0
-    else:
-        lp_quote_value_usd = (position_breakdown or {}).get('lp_quote_value_usd', 0.0) or 0.0
-        dlmm_conversion_cost_usd = 0.0
-    lp_quote_value_q   = _normalize_to_quote(lp_quote_value_usd, 'USDC', display_quote, sol_price_usd)
-
     total_invested    = spread_cost
     realized_proceeds = total_sell_revenue
     holdings_value    = current_value
-    net_pnl           = realized_proceeds + holdings_value + lp_quote_value_q - total_invested
+    net_pnl           = realized_proceeds + holdings_value + dlmm_recovered_q - total_invested
     net_pnl_pct       = (net_pnl / total_invested * 100) if total_invested > 0 else 0
     realized_pnl   = (total_sell_revenue - spread_avg * total_sold) if (total_sold > 0 and spread_avg > 0) else 0
     unrealized_pnl = ((current_token_price - spread_avg) * holdings) if (holdings > 0 and spread_avg > 0) else 0
@@ -1478,10 +1489,10 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
     usd_mult = 1.0 if display_quote in ('USD', 'USDC') else sol_price_usd
 
     # Break-even on remaining holdings: price the bag must reach for net P/L = 0.
-    # Recovered capital (realized sells + DLMM quote leg) reduces what the
-    # remaining CARDS still has to earn back. If recovery already exceeds cost,
-    # you're past break-even (clamp to 0).
-    unrecovered_cost = max(0.0, spread_cost - total_sell_revenue - lp_quote_value_q)
+    # Recovered capital (realized sells + DLMM sold-CARDS proceeds + DLMM fee
+    # income) reduces what the remaining CARDS still has to earn back. If
+    # recovery already exceeds cost, you're past break-even (clamp to 0).
+    unrecovered_cost = max(0.0, spread_cost - total_sell_revenue - dlmm_recovered_q)
     break_even_price = (unrecovered_cost / holdings) if holdings > 0 else 0
     break_even_pct_above_current = (
         (break_even_price - current_token_price) / current_token_price * 100
@@ -1498,6 +1509,9 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
             'avg': extra_cost / extra_tokens_priced if extra_tokens_priced > 0 else 0,
             'pct_of_cost': (extra_cost / spread_cost * 100) if spread_cost > 0 else 0,
             'source': cost_source},
+        'dlmm_buys': {'tokens': dlmm_conversion_tokens, 'cost': dlmm_cost_q,
+            'avg': dlmm_cost_q / dlmm_conversion_tokens if dlmm_conversion_tokens > 0 else 0,
+            'pct_of_cost': (dlmm_cost_q / spread_cost * 100) if spread_cost > 0 else 0},
     }
 
     return {
@@ -1553,6 +1567,11 @@ def calculate_summary(trades, dca_aggregate, on_chain_balance,
         'realized_proceeds_usd': realized_proceeds * usd_mult,
         'dlmm_realized_proceeds_usd': lp_quote_value_usd,
         'dlmm_conversion_cost_usd': dlmm_conversion_cost_usd,
+        'dlmm_conversion_tokens': dlmm_conversion_tokens,
+        'dlmm_fee_income_usd': dlmm_fee_income_usd,
+        'dlmm_fee_tokens': dlmm_fee_tokens,
+        'dlmm_recovered_usd': lp_quote_value_usd + dlmm_fee_income_usd,
+        'dlmm_pools': dlmm_pools,
     }
 
 
@@ -1788,7 +1807,7 @@ def _find_bin_array_accounts(lb_pair_key):
     return _get_program_accounts_pubkeys(METEORA_DLMM, filters)
 
 
-_CARDS_LB_PAIR_CACHE = {}  # address -> bool (is a target-mint LbPair)
+_CARDS_LB_PAIR_CACHE = {}  # (address, target_mint) -> bool (is a target-mint LbPair)
 
 def _dlmm_ix_accounts(tx):
     """Account list of the tx's top-level Meteora DLMM instruction, or []."""
@@ -1809,8 +1828,10 @@ def identify_cards_lb_pairs(transactions, target_mint):
     """Set of LbPair addresses (involving target_mint) referenced by DLMM txs.
 
     Decodes each candidate instruction account once via _decode_lb_pair and
-    caches the verdict so repeated scans don't re-fetch. Accounts that fail to
-    decode as an LbPair are cached as False.
+    caches the verdict (keyed by (address, target_mint)) so repeated scans
+    don't re-fetch. Transient fetch/decode failures are NOT written to the
+    cache so the next scan retries the account rather than permanently dropping
+    a genuine LbPair.
     """
     candidates = set()
     for tx in transactions:
@@ -1821,17 +1842,21 @@ def identify_cards_lb_pairs(transactions, target_mint):
                 candidates.add(acct)
     pairs = set()
     for acct in candidates:
-        cached = _CARDS_LB_PAIR_CACHE.get(acct)
+        cache_key = (acct, target_mint)
+        cached = _CARDS_LB_PAIR_CACHE.get(cache_key)
         if cached is None:
-            cached = False
+            result = False
             try:
                 raw = _get_account_data(acct)
                 info = _decode_lb_pair(raw) if raw else None
                 if info and target_mint in (info.get('token_x_mint'), info.get('token_y_mint')):
-                    cached = True
+                    result = True
+                # decode completed without exception: persist the verdict
+                _CARDS_LB_PAIR_CACHE[cache_key] = result
             except Exception:
-                cached = False
-            _CARDS_LB_PAIR_CACHE[acct] = cached
+                # transient failure: use False for this scan only, do NOT cache
+                result = False
+            cached = result
         if cached:
             pairs.add(acct)
     return pairs
@@ -1851,19 +1876,25 @@ def compute_dlmm_conversions(transactions, target_mint, wallets, sol_price_usd,
     EPS = 1.0
     wset = set(wallets)
     pairs = identify_cards_lb_pairs(transactions, target_mint)
-    agg = {}  # pair -> [net_cards, net_quote_usd]
+    agg = {}   # pair -> [net_cards, net_quote_usd]   principal (non-claim) txs
+    fees = {}  # pair -> [claimed_cards, claimed_quote_usd]   pure fee-claim txs
+    cards_sigs = set()
     for tx in transactions:
-        if _is_dlmm_claim(tx):
-            continue
         accts = _dlmm_ix_accounts(tx)
         if not accts:
             continue
         pair = next((a for a in accts if a in pairs), None)
         if pair is None:
             continue
+        cards_sigs.add(tx.get('signature', ''))
         td, sd, qd = _compute_balance_deltas(tx, target_mint, wset)
         q_usd = qd.get(USDC_MINT, 0.0) + qd.get(USDT_MINT, 0.0) + sd * sol_price_usd
-        slot = agg.setdefault(pair, [0.0, 0.0])
+        if _is_dlmm_claim(tx):
+            # Pure fee claim. Claimed CARDS already land in wallet holdings;
+            # claimed quote (USDC/USDT/SOL) is cash income from the position.
+            slot = fees.setdefault(pair, [0.0, 0.0])
+        else:
+            slot = agg.setdefault(pair, [0.0, 0.0])
         slot[0] += td
         slot[1] += q_usd
     for p in (open_positions or []):
@@ -1874,18 +1905,35 @@ def compute_dlmm_conversions(transactions, target_mint, wallets, sol_price_usd,
         slot[0] += p.get('tokens', 0.0)  # virtual CARDS withdrawal
         slot[1] += _dlmm_quote_value_usd(p.get('quote_tokens', 0.0),
                                          p.get('quote_symbol'), sol_price_usd)
-    realized = cost = 0.0
+    realized = cost = conv_tokens = fee_income = fee_tokens = 0.0
     pools = []
-    for pair, (net_cards, net_quote) in agg.items():
+    for pair in set(agg) | set(fees):
+        net_cards, net_quote = agg.get(pair, [0.0, 0.0])
+        fee_cards, fee_quote = fees.get(pair, [0.0, 0.0])
         if net_cards < -EPS:
             kind = 'sell'; realized += max(0.0, net_quote)
         elif net_cards > EPS:
-            kind = 'buy'; cost += max(0.0, -net_quote)
+            kind = 'buy'
+            if net_quote < 0:
+                # Quote spent for CARDS: a purchase channel (joins cost basis).
+                # A buy pool with no net quote spend handed out free CARDS
+                # (e.g. fees swept in a combined tx); those never enter avg cost.
+                cost += -net_quote; conv_tokens += net_cards
         else:
             kind = 'flat'
+        fee_income += max(0.0, fee_quote); fee_tokens += max(0.0, fee_cards)
         pools.append({'pair': pair, 'net_cards': net_cards,
-                      'net_quote_usd': net_quote, 'kind': kind})
-    return {'realized_proceeds_usd': realized, 'conversion_cost_usd': cost, 'pools': pools}
+                      'net_quote_usd': net_quote, 'kind': kind,
+                      'fees_target': fee_cards, 'fees_quote_usd': fee_quote})
+    return {
+        'realized_proceeds_usd': realized,   # quote received by pools that net-sold CARDS
+        'conversion_cost_usd': cost,         # quote spent by pools that net-bought CARDS
+        'conversion_tokens': conv_tokens,    # CARDS those buy pools delivered
+        'fee_income_usd': fee_income,        # quote fees claimed from CARDS pools
+        'fee_target_tokens': fee_tokens,     # CARDS fees claimed (already in holdings)
+        'pools': pools,
+        'tx_signatures': cards_sigs,         # DLMM txs that touch a CARDS pool
+    }
 
 
 def get_dlmm_positions(wallets, target_mint, target_decimals=None):
@@ -2148,6 +2196,24 @@ def analyze():
             wallets, target_mint, target_decimals
         )
 
+        # Per-pool DLMM conversion ledger (sold-CARDS proceeds, bought-CARDS
+        # cost, claimed fee income). Also tells us which DLMM txs touch a
+        # CARDS pool at all.
+        dlmm_conversions = compute_dlmm_conversions(
+            unique, target_mint, wallets, sol_price_usd,
+            open_positions=dlmm_positions, token_price_usd=token_price_usd,
+        )
+        # DLMM ops on OTHER pools (e.g. SOL/USDC LP in the same wallet) move no
+        # CARDS and have nothing to do with this token: drop them from the log
+        # and the LP activity panel. Anything that moved CARDS is always kept.
+        cards_dlmm_sigs = dlmm_conversions.get('tx_signatures', set())
+        n_before = len(trades)
+        trades = [t for t in trades
+                  if t['type'] != 'lp_op' or abs(t['token_delta']) > 1e-9
+                  or t['signature'] in cards_dlmm_sigs]
+        if len(trades) != n_before:
+            print(f'[dlmm] dropped {n_before - len(trades)} DLMM ops on non-{token_symbol or "target"} pools')
+
         # build the position breakdown
         # Tx-derived wallet estimate, used as a fallback when on-chain RPC failed.
         # Mirrors the computed_holdings formula in calculate_summary.
@@ -2179,11 +2245,6 @@ def analyze():
         # v3.12: pair limit-order setups with their fills via Reserve token accounts
         limit_buy_orders, limit_sell_orders = analyze_limit_orders(
             unique, target_mint, wallet_set, sol_price_usd
-        )
-
-        dlmm_conversions = compute_dlmm_conversions(
-            unique, target_mint, wallets, sol_price_usd,
-            open_positions=dlmm_positions, token_price_usd=token_price_usd,
         )
 
         trades = normalize_trade_prices(trades, display_quote, sol_price_usd)
