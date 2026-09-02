@@ -714,13 +714,16 @@
                 <div class="split">Recovered from DLMM (pool sold ${sym}): <span class="pos">+${fmtUsd(dlmmProceeds)}</span></div>` : '')
                 + (dlmmFees > 0.01 ? `
                 <div class="split">DLMM fees claimed (USDC/SOL): <span class="pos">+${fmtUsd(dlmmFees)}</span></div>` : '');
+            const netOut = (summary.total_invested_usd || 0) - (summary.realized_proceeds_usd || 0)
+                         - dlmmProceeds - dlmmFees;
             const dlmmCostLine = dlmmCost > 0.01 ? `
                 <div class="split">incl. ${fmtUsd(dlmmCost)} bought via DLMM (${fmt(dlmmTokens, 0)} ${sym})</div>` : '';
             el.style.display = 'grid';
             el.innerHTML = `
-                <div class="pnl-cell"><div class="label">Total Invested</div>
+                <div class="pnl-cell"><div class="label">Total Invested (gross)</div>
                     <div class="value">${fmt(summary.total_invested, 2)} ${q}</div>
-                    <div class="sub">${fmtUsd(summary.total_invested_usd)} cash in</div>
+                    <div class="sub">${fmtUsd(summary.total_invested_usd)} across every buy ever, incl. re-buys funded by earlier sells</div>
+                    <div class="split">Net cash still out of pocket: <span class="${netOut > 0 ? 'neg' : 'pos'}">${fmtUsd(netOut)}</span></div>
                     ${dlmmCostLine}</div>
                 <div class="pnl-cell pnl-divider"><div class="label">Realized From Sells</div>
                     <div class="value">${fmt(summary.realized_proceeds, 2)} ${q}</div>
