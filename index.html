@@ -401,15 +401,15 @@
                             <input type="number" id="projCards" min="0" step="1" placeholder="0">
                         </div>
                         <div class="input-group">
-                            <label>Cardholder emissions so far (tokens)</label>
+                            <label>$CARDS received so far (all cards combined)</label>
                             <input type="number" id="projPastEmissions" min="0" step="any" placeholder="e.g. 10000">
                         </div>
                         <div class="input-group">
-                            <label>Card cost (USD)</label>
+                            <label>Cost per card (USD, what you paid per NFT)</label>
                             <input type="number" id="projCardCost" min="0" step="any" placeholder="optional">
                         </div>
                         <div class="input-group">
-                            <label>Expected tokens / card / quarter</label>
+                            <label>Expected $CARDS tokens per card per quarter</label>
                             <input type="number" id="projRate" min="0" step="any" placeholder="e.g. 1500">
                         </div>
                         <div class="input-group">
@@ -1205,10 +1205,11 @@
             const futureUSD = futureTokens * priceUSD;
             const totalUSD  = totalTokens  * priceUSD;
 
-            const hasCost = cardCost > 0 && totalTokens > 0;
-            const effectiveCostPerToken = hasCost ? (cardCost / totalTokens) : null;
+            const totalCost = cards * cardCost;   // cardCost is per NFT; tokens are across ALL cards
+            const hasCost = totalCost > 0 && totalTokens > 0;
+            const effectiveCostPerToken = hasCost ? (totalCost / totalTokens) : null;
             const breakEvenPrice        = effectiveCostPerToken;
-            const roiPct                = hasCost ? ((totalUSD - cardCost) / cardCost * 100) : null;
+            const roiPct                = hasCost ? ((totalUSD - totalCost) / totalCost * 100) : null;
             const profitable            = (priceUSD > 0 && breakEvenPrice !== null) ? (priceUSD > breakEvenPrice) : null;
 
             const quarterRows = [];
@@ -1223,7 +1224,7 @@
             }
 
             return {
-                cards, cardCost, rate, quarters,
+                cards, cardCost, totalCost, rate, quarters,
                 pastTokens, futureTokens, totalTokens,
                 pastUSD, futureUSD, totalUSD,
                 priceUSD,
@@ -1272,7 +1273,7 @@
                     <div class="projection-tile ${cls}">
                         <div class="label">Effective cost / token</div>
                         <div class="value">${beStr}</div>
-                        <div class="sub">break-even = ${beStr}<br>${priceCmp}</div>
+                        <div class="sub">${p.cards} cards x ${fmtUsd(p.cardCost)} = ${fmtUsd(p.totalCost)} invested<br>&divide; ${fmt(p.totalTokens, 0)} tokens (so far + ${p.quarters}q)<br>${priceCmp}</div>
                     </div>
                 `);
             }
